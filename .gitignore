@@ -1,0 +1,7 @@
+# Machine-specific symlink to the external docsynth datasets (see tester/backend/specs/dataset-format.md)
+/tester/datasets
+
+# Environment files (secrets); keep templates tracked
+.env
+.env.*
+!.env.example

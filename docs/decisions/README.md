@@ -1,0 +1,32 @@
+# Decision Log
+
+Architecture decision records (ADRs), one file per decision, numbered in order.
+
+## Format
+
+```
+# NNNN. Title
+
+- Status: proposed | accepted | superseded by NNNN
+- Date: YYYY-MM-DD
+
+## Context
+## Decision
+## Consequences
+```
+
+Accepted ADRs are not rewritten; a changed decision gets a new ADR that supersedes the old one.
+
+## Index
+
+| # | Decision | Status |
+|---|---|---|
+| [0001](0001-microservices-over-rabbitmq.md) | Pipeline as microservices connected via RabbitMQ | accepted |
+| [0002](0002-object-storage-for-documents.md) | Documents travel through MinIO object storage | accepted |
+| [0003](0003-merge-layout-and-text-extraction.md) | Layout analysis and text extraction are one module | accepted |
+| [0004](0004-llm-provider-abstraction.md) | LLM provider abstraction, Anthropic only for MVP | accepted |
+| [0005](0005-react-web-frontend-for-testing-client.md) | Testing client frontend is a React web app | accepted |
+| [0006](0006-datasets-via-symlink.md) | Datasets supplied through a symlinked directory | accepted |
+| [0007](0007-mvp-clean-text-pdfs.md) | MVP scope: clean text PDFs, no OCR | accepted |
+| [0008](0008-extraction-schema.md) | Extraction schema: core header + basic lines, invoice-level tax | accepted |
+| [0009](0009-pipeline-contracts.md) | Pipeline contracts: queues, envelope, failures | accepted |
