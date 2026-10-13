@@ -19,7 +19,7 @@ Invoice data extraction pipeline (study project, Spec-Driven Development). Overv
 - **Do not guess.** Items marked `OPEN:` are undecided: ask the author instead of choosing. Items marked `PROPOSED:` are suggestions not yet confirmed: implement only after confirmation.
 - **Stay inside the module** you were asked to work on. Cross-module interfaces change only through `specs/pipeline-contracts.md` (and the affected module specs together).
 - **Record decisions.** A significant architectural choice gets a new ADR in `docs/decisions/` (see its README).
-- **Do not modify** `README-DRAFT.md` (the author's original draft) or anything under `tester/datasets/` (read-only external data, symlink).
+- **Do not modify** anything under `tester/datasets/` (read-only external data, symlink).
 - Keep the root `README.md` general; technical details (tables, APIs, formats) belong in module `specs/`.
 
 ## Modules

@@ -65,4 +65,3 @@ Test runs send invoices from a chosen dataset to the pipeline in parallel, then 
 - Specs are the source of truth. Code must follow them; change the spec first.
 - Open questions in specs are marked `OPEN:`. Decisions not yet confirmed by the author are marked `PROPOSED:`.
 - Read [`AGENTS.md`](AGENTS.md) before working on any module.
-- Original author draft is kept unchanged in [`README-DRAFT.md`](README-DRAFT.md).
