@@ -62,6 +62,7 @@ Decision record for the general rules: `docs/decisions/0011-failure-handling.md`
 - Permanent errors (not retried) publish a failure message to `documents.failed` at once and ack the input.
 - The `no_text_layer` check counts characters left after watermark removal (see `output-format.md`), so a scanned PDF with a text watermark is still detected. Pages without text in an otherwise text-based PDF are not an error.
 - `storage_unavailable` is retried in-process: 3 attempts in total, waiting 1 s and then 5 s between them. After the last attempt the document is failed with that code.
+- Each storage call times out after 10 s (connect: 5 s), so a hanging MinIO fails a document after about 36 s.
 - If RabbitMQ itself fails (publish or ack), the process does not ack; it reconnects, and the broker redelivers the message.
 - Invalid messages are rejected without requeue (dead-lettered, see `/specs/pipeline-contracts.md`); no failure message is published, since the message cannot be trusted to identify a document.
 
