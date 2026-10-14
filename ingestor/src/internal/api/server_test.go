@@ -154,6 +154,24 @@ func TestLogging(t *testing.T) {
 			t.Fatalf("error entry %v, want level ERROR with document_id", m)
 		}
 	})
+
+	for name, setup := range map[string]func(*env){
+		"storage": func(e *env) { e.storage.putErr = errDown },
+		"queue":   func(e *env) { e.pub.publishErr = errDown },
+	} {
+		t.Run(name+" failure details are logged, not returned", func(t *testing.T) {
+			e := newEnv()
+			setup(e)
+			resp := expectError(t, e.upload(fileField(validPDF)), 503, "service_unavailable")
+			if resp.Error.Message != "service temporarily unavailable, retry later" {
+				t.Errorf("response message %q, want the generic one", resp.Error.Message)
+			}
+			m := hasLog(e.logs.entries(t), "request failed")
+			if m == nil || !strings.Contains(m["error"].(string), errDown.Error()) {
+				t.Fatalf("log entry %v, want the cause %q", m, errDown)
+			}
+		})
+	}
 }
 
 func TestSubstitutionWarnings(t *testing.T) {

@@ -34,10 +34,14 @@ Clean, text-based PDFs only.
 ## Behaviour
 
 - The ingestor does not create the bucket or queues; `infra/` provisions them. A missing queue or bucket makes `/healthz` and `POST /documents` return `503`.
-- Upload flow: validate the request, write `documents/{document_id}/original.pdf` (content type `application/pdf`), then publish the envelope to `documents.ingested` (persistent, mandatory, with publisher confirms). `202` is returned only after the broker confirms. If publishing fails after the object is written, the response is `503` and the object stays in storage (orphan; no cleanup in MVP).
+- Upload flow: validate the request, write `documents/{document_id}/original.pdf` (content type `application/pdf`), then publish the envelope to `documents.ingested` (persistent, mandatory, with publisher confirms). `202` is returned only after the broker confirms. If publishing fails after the object is written, the response is `503` and the object stays in storage (see Known debt).
 - Storage write and publish each time out after 10 s.
 - Published messages also carry the correlation ID in the AMQP `correlation_id` property and the `X-Correlation-ID` message header (the body field stays the source of truth).
 - Logs are JSON lines on stdout (Go `log/slog`), one access entry per request plus entries for errors.
+
+## Known debt
+
+- **Orphaned originals.** If publishing fails after `original.pdf` is written, the object stays in MinIO with no message referring to it. The client got `503` and may retry, which creates a new `document_id`, so the orphan is never processed or overwritten. Accepted for the MVP. A later fix could be a periodic cleanup of `documents/*/original.pdf` objects older than a threshold that no later stage has touched, or deleting the object on publish failure (best effort).
 
 ## Configuration
 

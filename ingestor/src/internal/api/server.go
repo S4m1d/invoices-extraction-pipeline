@@ -106,7 +106,11 @@ func (s *Server) withState(next http.Handler) http.Handler {
 func (s *Server) fail(w http.ResponseWriter, r *http.Request, e *apiError) {
 	log := correlation.Logger(r.Context(), s.log)
 	if e.Status >= 500 && e.Code != "server_busy" {
-		log.Error("request failed", "code", e.Code, "error", e.Message)
+		detail := e.Detail
+		if detail == "" {
+			detail = e.Message
+		}
+		log.Error("request failed", "code", e.Code, "error", detail)
 	} else {
 		log.Info("request rejected", "code", e.Code, "error", e.Message)
 	}
@@ -198,8 +202,7 @@ func (s *Server) createDocument(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), s.dependencyTimeout)
 	defer cancel()
 	if err := s.storage.PutPDF(ctx, key, pdf); err != nil {
-		s.fail(w, r, newError(http.StatusServiceUnavailable, "service_unavailable",
-			"object storage unavailable: "+err.Error()))
+		s.fail(w, r, unavailable("object storage: "+err.Error()))
 		return
 	}
 
@@ -212,15 +215,14 @@ func (s *Server) createDocument(w http.ResponseWriter, r *http.Request) {
 		CreatedAt:     s.now().UTC().Format(time.RFC3339Nano),
 	})
 	if err != nil {
-		s.fail(w, r, newError(http.StatusInternalServerError, "internal_error", err.Error()))
+		s.fail(w, r, internalError("encode envelope: "+err.Error()))
 		return
 	}
 
 	ctx, cancel = context.WithTimeout(r.Context(), s.dependencyTimeout)
 	defer cancel()
 	if err := s.publisher.Publish(ctx, body); err != nil {
-		s.fail(w, r, newError(http.StatusServiceUnavailable, "service_unavailable",
-			"queue unavailable: "+err.Error()))
+		s.fail(w, r, unavailable("queue: "+err.Error()))
 		return
 	}
 

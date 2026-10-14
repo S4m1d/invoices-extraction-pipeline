@@ -62,7 +62,8 @@ Every `4xx` and `5xx` response (where a response can still be sent) has a JSON b
 }
 ```
 
-- `code`: machine-readable, from the table below. `message`: human-readable details, not to be parsed.
+- `code`: machine-readable, from the table below. `message`: human-readable, not to be parsed.
+- `4xx` messages explain what is wrong with the request. `5xx` messages are generic and never reveal internal details (hosts, ports, dependency errors): `service_unavailable` returns `service temporarily unavailable, retry later`, `internal_error` returns `internal error`. The cause is written to the log entry for the request (field `error`), found by `correlation_id`.
 - `correlation_id`: the ID used in this request's log entries (see [Correlation ID](#correlation-id)).
 - These codes are local to the ingestor HTTP API and are separate from the `documents.failed` error codes in `/specs/pipeline-contracts.md`.
 

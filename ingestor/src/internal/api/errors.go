@@ -12,13 +12,26 @@ import (
 type apiError struct {
 	Status  int
 	Code    string
-	Message string
+	Message string // returned to the client
+	Detail  string // logged only; for 5xx errors, which return a generic Message
 }
 
 func (e *apiError) Error() string { return e.Code + ": " + e.Message }
 
 func newError(status int, code, message string) *apiError {
 	return &apiError{Status: status, Code: code, Message: message}
+}
+
+// unavailable is a 503 whose cause is logged but not returned.
+func unavailable(detail string) *apiError {
+	return &apiError{Status: http.StatusServiceUnavailable, Code: "service_unavailable",
+		Message: "service temporarily unavailable, retry later", Detail: detail}
+}
+
+// internalError is a 500 whose cause is logged but not returned.
+func internalError(detail string) *apiError {
+	return &apiError{Status: http.StatusInternalServerError, Code: "internal_error",
+		Message: "internal error", Detail: detail}
 }
 
 // readError classifies an error that occurred while reading the request body.
