@@ -24,7 +24,7 @@ Each of queues 1 to 3 has a dead-letter queue named `<queue>.dlq`, used for mess
 
 ## Object storage layout
 
-One bucket. Keys by document ID:
+One bucket, named `invoices`. Keys by document ID:
 
 ```
 documents/{document_id}/original.pdf       written by ingestor

@@ -72,10 +72,20 @@ Every `4xx` and `5xx` response (where a response can still be sent) has a JSON b
 | `file_too_large` | `413` | Size limit |
 | `service_unavailable` | `503` | RabbitMQ or MinIO unreachable |
 | `internal_error` | `500` | Unexpected error |
+| `malformed_request` | `400` | Body is not valid multipart |
+| `not_found` | `404` | Unknown path |
+| `method_not_allowed` | `405` | Wrong method on a known path; `Allow` header is set |
+
+Processing order: parts are validated in the order they arrive and the first violation is returned. A `correlation_id` part that arrives after the failing part is not read, so the response and logs use the generated ID.
+
+Whenever the generated ID is used even though the client may have sent its own, the ingestor writes a `WARN` log entry saying so, with the generated `correlation_id` and the reason:
+
+- `client correlation_id invalid, using generated correlation_id` (R5 violation; the entry also contains the rejected value, truncated to 64 characters, as `client_correlation_id`).
+- `request rejected before correlation_id was read, using generated correlation_id` (a `POST /documents` rejection that happens before the whole body was read and before any `correlation_id` part was processed; not logged when the body was fully read without a `correlation_id` part, since then the client sent none).
 
 ## `GET /healthz`
 
-Used by the Docker healthcheck.
+Used by the Docker healthcheck. RabbitMQ is reachable when the ingestor can connect and the queue `documents.ingested` exists; MinIO is reachable when the bucket `invoices` exists. Each check times out after 3 s.
 
 - `200 OK` with `{ "status": "ok" }` when the process is up and both RabbitMQ and MinIO are reachable.
 - `503 Service Unavailable` with `{ "status": "unavailable", "failing": ["rabbitmq" | "minio", ...] }` otherwise.
