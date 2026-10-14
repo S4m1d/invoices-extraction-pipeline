@@ -12,7 +12,7 @@ ADR 0009 put `correlation_id` in the message envelope as a free-form string that
 - `correlation_id` is a UUID in canonical lowercase form, used for debugging and tracing.
 - Expected use is one per request, unique among requests within one day; clients are strongly recommended to generate a new one per request. Uniqueness is not enforced: a duplicate only makes tracing ambiguous, it does not break processing.
 - The client may send it with the upload; if it does not, `ingestor` generates a UUIDv4. The value is never empty.
-- Every stage copies it unchanged into all messages it publishes, including failure messages.
+- It is a pass-through identifier: it sticks to all downstream work for the request. Every stage copies it unchanged into all messages it publishes (including failure messages) and into outgoing calls to any system, internal or external, where the protocol allows (HTTP header `X-Correlation-ID`), so it can appear in those systems' logs (for example MinIO debug logs or a self-hosted model).
 - Every service writes `correlation_id` (and `document_id` once known) into every log entry related to a request or message.
 
 ## Consequences

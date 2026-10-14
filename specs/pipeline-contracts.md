@@ -53,7 +53,9 @@ Decision record: `docs/decisions/0010-correlation-id.md`.
 
 - `correlation_id` is a UUID in canonical lowercase form (`xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`).
 - It is assigned once, at the entry point: `ingestor` takes it from the client request or generates one (UUIDv4) if the client did not send it. See `ingestor/specs/api.md`.
-- Every later stage copies it unchanged from the incoming message into every message it publishes, including failure messages.
+- It is a pass-through identifier: once assigned, it sticks to everything done downstream on behalf of the original request and is never replaced or regenerated.
+  - Every stage copies it unchanged from the incoming message into every message it publishes, including failure messages.
+  - Every outgoing call a service makes while handling the request or message carries it where the protocol allows, in the HTTP header `X-Correlation-ID` for HTTP calls. This applies to all systems, internal and external alike (for example MinIO, LLM provider APIs, a future self-hosted model), so the ID can show up in their debug logs. Systems that ignore the header are not a problem.
 - Purpose: debugging and tracing. It lets one request be followed through all services and logs.
 - Expected use: one `correlation_id` per request, unique among all requests within one day. Clients are strongly recommended to generate a new UUID for every request (or omit it and let the ingestor generate one).
 - Uniqueness is not enforced. If a client accidentally reuses a value, the pipeline processes the documents normally; only tracing becomes ambiguous (log searches return entries for several requests, which `document_id` tells apart).
