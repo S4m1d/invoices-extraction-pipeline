@@ -12,6 +12,7 @@ Go.
 
 - Accept documents through a `POST` request.
 - Assign a `document_id`.
+- Take the client's `correlation_id` or generate one (see `/specs/pipeline-contracts.md`).
 - Store the original file in object storage.
 - Publish a message to the `text-extractor` queue (see `/specs/pipeline-contracts.md`).
 
@@ -31,5 +32,7 @@ Clean, text-based PDFs only.
 
 ## Open questions
 
-- OPEN: file validation rules (MIME type, max size).
-- OPEN: is the response synchronous only (accepted + `document_id`) or is there a status endpoint?
+None. Resolved:
+
+- Request restrictions: see [`api.md`](api.md#request-restrictions).
+- The API is synchronous only (`202` with `document_id` and `correlation_id`); there is no status endpoint.
