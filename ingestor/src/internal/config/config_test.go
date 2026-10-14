@@ -15,14 +15,14 @@ func setRequired(t *testing.T) {
 
 func TestLoadDefaults(t *testing.T) {
 	setRequired(t)
-	for _, name := range []string{"INGESTOR_HTTP_ADDR", "MINIO_USE_SSL", "LOG_LEVEL"} {
+	for _, name := range []string{"INGESTOR_HTTP_ADDR", "MINIO_USE_SSL", "LOG_LEVEL", "INGESTOR_MAX_CONCURRENT_UPLOADS"} {
 		t.Setenv(name, "")
 	}
 	c, err := Load()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.HTTPAddr != ":8080" || c.MinioUseSSL || c.LogLevel != slog.LevelInfo {
+	if c.HTTPAddr != ":8080" || c.MinioUseSSL || c.LogLevel != slog.LevelInfo || c.MaxUploads != 20 {
 		t.Fatalf("defaults: %+v", c)
 	}
 	if c.AMQPURL == "" || c.MinioEndpoint == "" || c.MinioAccessKey == "" || c.MinioSecretKey == "" {
@@ -35,11 +35,12 @@ func TestLoadOverrides(t *testing.T) {
 	t.Setenv("INGESTOR_HTTP_ADDR", ":9999")
 	t.Setenv("MINIO_USE_SSL", "true")
 	t.Setenv("LOG_LEVEL", "debug")
+	t.Setenv("INGESTOR_MAX_CONCURRENT_UPLOADS", "5")
 	c, err := Load()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.HTTPAddr != ":9999" || !c.MinioUseSSL || c.LogLevel != slog.LevelDebug {
+	if c.HTTPAddr != ":9999" || !c.MinioUseSSL || c.LogLevel != slog.LevelDebug || c.MaxUploads != 5 {
 		t.Fatalf("overrides: %+v", c)
 	}
 }
@@ -50,11 +51,12 @@ func TestLoadReportsAllProblems(t *testing.T) {
 	}
 	t.Setenv("MINIO_USE_SSL", "maybe")
 	t.Setenv("LOG_LEVEL", "loud")
+	t.Setenv("INGESTOR_MAX_CONCURRENT_UPLOADS", "0")
 	_, err := Load()
 	if err == nil {
 		t.Fatal("expected error")
 	}
-	for _, name := range []string{"AMQP_URL", "MINIO_ENDPOINT", "MINIO_ACCESS_KEY", "MINIO_SECRET_KEY", "MINIO_USE_SSL", "LOG_LEVEL"} {
+	for _, name := range []string{"AMQP_URL", "MINIO_ENDPOINT", "MINIO_ACCESS_KEY", "MINIO_SECRET_KEY", "MINIO_USE_SSL", "LOG_LEVEL", "INGESTOR_MAX_CONCURRENT_UPLOADS"} {
 		if !strings.Contains(err.Error(), name) {
 			t.Errorf("error %q does not mention %s", err, name)
 		}

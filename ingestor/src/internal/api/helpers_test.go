@@ -42,6 +42,8 @@ func (c *calls) list() []string {
 
 type fakeStorage struct {
 	calls    *calls
+	putGate  chan struct{} // if set, PutPDF signals entered and waits for release
+	entered  chan struct{}
 	putErr   error
 	checkErr error
 	block    bool // Check waits for ctx to end
@@ -53,6 +55,10 @@ type fakeStorage struct {
 
 func (f *fakeStorage) PutPDF(ctx context.Context, key string, data []byte) error {
 	f.calls.add("put")
+	if f.putGate != nil {
+		f.entered <- struct{}{}
+		<-f.putGate
+	}
 	f.key, f.data, f.correlationID = key, data, correlation.ID(ctx)
 	return f.putErr
 }
@@ -126,12 +132,14 @@ type env struct {
 	logs    *logBuffer
 }
 
-func newEnv() *env {
+func newEnv() *env { return newEnvWithLimit(20) }
+
+func newEnvWithLimit(maxUploads int) *env {
 	c := &calls{}
 	logs := &logBuffer{}
 	st := &fakeStorage{calls: c}
 	pub := &fakePublisher{calls: c}
-	s := NewServer(st, pub, slog.New(slog.NewJSONHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	s := NewServer(st, pub, slog.New(slog.NewJSONHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug})), maxUploads)
 	return &env{server: s, handler: s.Handler(), storage: st, pub: pub, calls: c, logs: logs}
 }
 

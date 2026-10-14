@@ -20,6 +20,7 @@ Go.
 
 - No parsing or validation of document content.
 - No OCR.
+- No authentication or authorization in the MVP: the API is reachable only inside the Docker network.
 
 ## Scope (MVP)
 
@@ -51,6 +52,7 @@ Environment variables:
 | `MINIO_SECRET_KEY` | yes | | |
 | `MINIO_USE_SSL` | no | `false` | |
 | `LOG_LEVEL` | no | `info` | `debug`, `info`, `warn`, `error` |
+| `INGESTOR_MAX_CONCURRENT_UPLOADS` | no | `20` | Upload concurrency limit, at least `1`; see `api.md` |
 
 ## Open questions
 

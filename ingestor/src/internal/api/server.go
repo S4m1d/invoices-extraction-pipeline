@@ -39,13 +39,19 @@ type Server struct {
 
 	healthTimeout     time.Duration
 	dependencyTimeout time.Duration
+
+	// uploads limits concurrent POST /documents requests; each holds up to
+	// MaxRequestBytes in memory.
+	uploads chan struct{}
 }
 
-func NewServer(storage Storage, publisher Publisher, log *slog.Logger) *Server {
+// NewServer creates a server that handles at most maxUploads uploads at once.
+func NewServer(storage Storage, publisher Publisher, log *slog.Logger, maxUploads int) *Server {
 	return &Server{
 		storage:           storage,
 		publisher:         publisher,
 		log:               log,
+		uploads:           make(chan struct{}, maxUploads),
 		now:               time.Now,
 		healthTimeout:     healthTimeout,
 		dependencyTimeout: dependencyTimeout,
@@ -99,7 +105,7 @@ func (s *Server) withState(next http.Handler) http.Handler {
 
 func (s *Server) fail(w http.ResponseWriter, r *http.Request, e *apiError) {
 	log := correlation.Logger(r.Context(), s.log)
-	if e.Status >= 500 {
+	if e.Status >= 500 && e.Code != "server_busy" {
 		log.Error("request failed", "code", e.Code, "error", e.Message)
 	} else {
 		log.Info("request rejected", "code", e.Code, "error", e.Message)
@@ -167,6 +173,18 @@ type acceptedBody struct {
 
 func (s *Server) createDocument(w http.ResponseWriter, r *http.Request) {
 	state := correlation.FromContext(r.Context())
+
+	select {
+	case s.uploads <- struct{}{}:
+		defer func() { <-s.uploads }()
+	default:
+		correlation.Logger(r.Context(), s.log).Warn(
+			"request rejected before correlation_id was read, using generated correlation_id",
+			"code", "server_busy")
+		s.fail(w, r, newError(http.StatusServiceUnavailable, "server_busy",
+			"too many concurrent uploads, retry later"))
+		return
+	}
 
 	pdf, apiErr := s.readUpload(w, r, state)
 	if apiErr != nil {

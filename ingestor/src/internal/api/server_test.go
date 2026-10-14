@@ -230,3 +230,51 @@ func TestSubstitutionWarnings(t *testing.T) {
 		}
 	})
 }
+
+func TestConcurrencyLimit(t *testing.T) {
+	e := newEnvWithLimit(1)
+	e.storage.putGate = make(chan struct{})
+	e.storage.entered = make(chan struct{})
+
+	first := make(chan int)
+	go func() { first <- e.upload(fileField(validPDF)).Code }()
+	<-e.storage.entered // the first upload holds the only slot
+
+	resp := expectError(t, e.upload(fileField(validPDF)), http.StatusServiceUnavailable, "server_busy")
+	entries := e.logs.entries(t)
+	warn := hasLog(entries, "request rejected before correlation_id was read, using generated correlation_id")
+	if warn == nil || warn["correlation_id"] != resp.CorrelationID {
+		t.Errorf("missing substitution warning, logs %v", entries)
+	}
+	if m := hasLog(entries, "request rejected"); m == nil || m["level"] != "INFO" {
+		t.Errorf("busy rejection should be logged at INFO, got %v", m)
+	}
+
+	t.Run("healthz is not limited", func(t *testing.T) {
+		if rec := e.do(httptest.NewRequest(http.MethodGet, "/healthz", nil)); rec.Code != http.StatusOK {
+			t.Fatalf("status %d, want 200", rec.Code)
+		}
+	})
+
+	close(e.storage.putGate)
+	if code := <-first; code != http.StatusAccepted {
+		t.Fatalf("first upload: status %d, want 202", code)
+	}
+	e.storage.putGate = nil
+	t.Run("slot is released after the upload finishes", func(t *testing.T) {
+		if rec := e.upload(fileField(validPDF)); rec.Code != http.StatusAccepted {
+			t.Fatalf("status %d, want 202; body %s", rec.Code, rec.Body)
+		}
+	})
+}
+
+func TestSlotReleasedAfterRejection(t *testing.T) {
+	e := newEnvWithLimit(1)
+	expectError(t, e.upload(fileField("hello")), 415, "not_pdf")
+	e.storage.putErr = errDown
+	expectError(t, e.upload(fileField(validPDF)), 503, "service_unavailable")
+	e.storage.putErr = nil
+	if rec := e.upload(fileField(validPDF)); rec.Code != http.StatusAccepted {
+		t.Fatalf("status %d, want 202 (slot leaked?)", rec.Code)
+	}
+}

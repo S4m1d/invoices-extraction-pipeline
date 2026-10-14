@@ -18,6 +18,7 @@ type Config struct {
 	MinioSecretKey string
 	MinioUseSSL    bool
 	LogLevel       slog.Level
+	MaxUploads     int
 }
 
 // Load reads the configuration and reports all missing or invalid variables at once.
@@ -50,6 +51,12 @@ func Load() (Config, error) {
 		invalid = append(invalid, "MINIO_USE_SSL")
 	}
 	c.MinioUseSSL = ssl
+
+	maxUploads, err := strconv.Atoi(optional("INGESTOR_MAX_CONCURRENT_UPLOADS", "20"))
+	if err != nil || maxUploads < 1 {
+		invalid = append(invalid, "INGESTOR_MAX_CONCURRENT_UPLOADS")
+	}
+	c.MaxUploads = maxUploads
 
 	if err := c.LogLevel.UnmarshalText([]byte(optional("LOG_LEVEL", "info"))); err != nil {
 		invalid = append(invalid, "LOG_LEVEL")

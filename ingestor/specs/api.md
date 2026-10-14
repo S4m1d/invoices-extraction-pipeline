@@ -21,6 +21,12 @@ Checked before anything is written to object storage or published to the queue. 
 - A request without `Content-Length` (chunked) is read up to the limit; reading stops and the request is rejected as soon as the limit is exceeded.
 - Response: `413 Payload Too Large`.
 
+### Concurrency
+
+- At most `INGESTOR_MAX_CONCURRENT_UPLOADS` `POST /documents` requests are handled at once (default `20`). Each one holds up to 5 MiB in memory until it is answered.
+- A request over the limit is rejected immediately, before its body is read: `503` with code `server_busy`. Clients may retry later.
+- `GET /healthz` is not limited.
+
 ### Other restrictions
 
 | # | Restriction | On violation | Status |
@@ -71,6 +77,7 @@ Every `4xx` and `5xx` response (where a response can still be sent) has a JSON b
 | `request_timeout` | `408` | R7 |
 | `file_too_large` | `413` | Size limit |
 | `service_unavailable` | `503` | RabbitMQ or MinIO unreachable |
+| `server_busy` | `503` | Concurrent upload limit reached |
 | `internal_error` | `500` | Unexpected error |
 | `malformed_request` | `400` | Body is not valid multipart |
 | `not_found` | `404` | Unknown path |

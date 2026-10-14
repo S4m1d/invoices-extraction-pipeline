@@ -74,7 +74,7 @@ func run() error {
 
 	srv := &http.Server{
 		Addr:         cfg.HTTPAddr,
-		Handler:      api.NewServer(store, pub, log).Handler(),
+		Handler:      api.NewServer(store, pub, log, cfg.MaxUploads).Handler(),
 		ReadTimeout:  readTimeout,
 		WriteTimeout: writeTimeout,
 		IdleTimeout:  idleTimeout,
