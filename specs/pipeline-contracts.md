@@ -22,9 +22,22 @@ Direct durable queues on the default exchange, one per stage. Messages are persi
 
 Each of queues 1 to 3 has a dead-letter queue named `<queue>.dlq`, used for messages that cannot be parsed or are rejected.
 
+### Dead-lettering
+
+Decision record: `docs/decisions/0011-failure-handling.md`.
+
+- Stage queues are declared plain: durable, no `x-` arguments. Any party may declare them (or check them passively) without conflicts.
+- Dead-lettering is configured on the broker by `infra/` with a policy, not with queue arguments:
+  - Policy `dead-letter`, pattern `^documents\.(ingested|text_extracted|fields_extracted)$`, apply to queues, definition `{"dead-letter-exchange": "dlx"}`.
+  - Exchange `dlx` (direct, durable). Each `<queue>.dlq` (durable) is bound to `dlx` with routing key `<queue>`. A dead-lettered message keeps its original routing key (the queue name, since producers publish on the default exchange), so it lands in the matching `.dlq`.
+- A consumer sends a message to the DLQ by rejecting it without requeue (`basic.reject` / `basic.nack` with `requeue=false`). Consumers never publish to `.dlq` queues directly.
+- `documents.failed` and the `.dlq` queues are not dead-lettered.
+
 ## Object storage layout
 
-One bucket, named `invoices`. Keys by document ID:
+### Bucket `invoices`: pipeline data
+
+Keys by document ID:
 
 ```
 documents/{document_id}/original.pdf       written by ingestor
@@ -33,6 +46,16 @@ documents/{document_id}/extracted.json     written by fields-extractor
 ```
 
 Objects are written before the message that references them is published. Re-processing a document overwrites its objects.
+
+### Failure buckets: diagnostics for manual checks
+
+Decision record: `docs/decisions/0011-failure-handling.md`.
+
+- Each stage that can fail a document for a reason a human should look into has its own bucket, named `{stage}-failures` (for example `text-extractor-failures`). A stage writes only to its own failure bucket.
+- Key: `{document_id}.json`. The content is defined in the stage's spec; it always contains `document_id`, `correlation_id`, `error_code`, `error_message` and `created_at`.
+- Which error codes produce a diagnostics file is defined in the stage's spec.
+- The diagnostics file is written before the failure message is published. Re-processing overwrites it.
+- Buckets are created by `infra/`. Current failure buckets: `text-extractor-failures`.
 
 ## Message envelope
 
@@ -68,8 +91,14 @@ Every service includes `correlation_id` in every log entry written while handlin
 
 ## Failures
 
-- A consumer retries a failing document up to the retry limit (OPEN: value, backoff; per-module limits in module specs).
-- After that it publishes a failure message to `documents.failed` and acks the original message.
+Decision record: `docs/decisions/0011-failure-handling.md`.
+
+- Errors are permanent (retrying cannot help, for example a corrupt PDF) or transient (a dependency is temporarily unavailable). Each module's spec classifies its errors.
+- Permanent errors fail the document at once.
+- Transient errors are retried in-process: the consumer waits and retries within the same delivery, then fails the document after the last attempt. Attempts and waits are set per module in its spec.
+- Failing a document means publishing a failure message to `documents.failed`, then acking the original message.
+- If RabbitMQ itself is unavailable (publish or ack fails), the consumer does not ack; the broker redelivers the message later.
+- Because of at-least-once delivery, the same document can produce more than one failure message (for example, when the failure is published but the ack is lost). Consumers of `documents.failed` must tolerate duplicates.
 
 Failure message (JSON):
 
@@ -83,9 +112,14 @@ Failure message (JSON):
 | `error_message` | string | Human-readable details |
 | `created_at` | string (RFC 3339) | |
 
-The tester finds the file to inspect via `documents/{document_id}/original.pdf`, plus any intermediate objects that exist.
+The tester finds the file to inspect via `documents/{document_id}/original.pdf`, plus any intermediate objects that exist, and the stage's diagnostics file `{stage}-failures/{document_id}.json` if that stage writes one.
 
-OPEN: error code list.
+### Error codes
+
+- Each module lists its error codes in its own spec: `text-extractor/specs/overview.md` (Errors). Other modules add theirs when their specs are written.
+- Codes are `snake_case`, stable once published, and unique within a module.
+- Generic codes have the same meaning in every module: `storage_unavailable` (object storage failing after retries), `internal_error` (unexpected exception).
+- A failure is identified by the pair (`stage`, `error_code`).
 
 ## Extracted JSON schema
 
