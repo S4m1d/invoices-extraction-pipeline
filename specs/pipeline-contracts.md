@@ -57,6 +57,8 @@ Decision record: `docs/decisions/0011-failure-handling.md`.
 - The diagnostics file is written before the failure message is published. Re-processing overwrites it.
 - Buckets are created by `infra/`. Current failure buckets: `text-extractor-failures`, `fields-extractor-failures`.
 
+Module-private buckets (not part of the pipeline data flow): `fields-extractor-usage` (daily LLM spend, see `fields-extractor/specs/overview.md`).
+
 ## Message envelope
 
 Every message on queues 1 to 3 is JSON with:
