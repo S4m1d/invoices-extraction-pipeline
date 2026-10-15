@@ -55,7 +55,7 @@ Decision record: `docs/decisions/0011-failure-handling.md`.
 - Key: `{document_id}.json`. The content is defined in the stage's spec; it always contains `document_id`, `correlation_id`, `error_code`, `error_message` and `created_at`.
 - Which error codes produce a diagnostics file is defined in the stage's spec.
 - The diagnostics file is written before the failure message is published. Re-processing overwrites it.
-- Buckets are created by `infra/`. Current failure buckets: `text-extractor-failures`.
+- Buckets are created by `infra/`. Current failure buckets: `text-extractor-failures`, `fields-extractor-failures`.
 
 ## Message envelope
 
