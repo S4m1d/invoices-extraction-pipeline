@@ -11,7 +11,7 @@ Cross-module contracts. Each module's own spec must stay consistent with this fi
 
 ## Queues
 
-Direct durable queues on the default exchange, one per stage. Messages are persistent (delivery mode 2). Consumers use manual acknowledgement and ack only after the work is done and the output is published (at-least-once delivery; consumers must be idempotent).
+Direct durable queues on the default exchange, one per stage. Messages are persistent (delivery mode 2). Consumers use manual acknowledgement and ack only after the work is done and the output is published (at-least-once delivery; consumers must be idempotent, with one exception: `integrator` fails a document whose `document_id` is already stored, see `docs/decisions/0012-integrator-duplicates-and-outages.md`).
 
 | # | Producer | Queue | Consumer | Message references |
 |---|---|---|---|---|
@@ -100,7 +100,7 @@ Decision record: `docs/decisions/0011-failure-handling.md`.
 - Transient errors are retried in-process: the consumer waits and retries within the same delivery, then fails the document after the last attempt. Attempts and waits are set per module in its spec.
 - Failing a document means publishing a failure message to `documents.failed`, then acking the original message.
 - If RabbitMQ itself is unavailable (publish or ack fails), the consumer does not ack; the broker redelivers the message later.
-- Because of at-least-once delivery, the same document can produce more than one failure message (for example, when the failure is published but the ack is lost). Consumers of `documents.failed` must tolerate duplicates.
+- Because of at-least-once delivery, the same document can produce more than one failure message (for example, when the failure is published but the ack is lost). Consumers of `documents.failed` must tolerate duplicates. A `duplicate_document` failure from `integrator` can arrive for a document whose row is stored and correct (a redelivered message after a successful write).
 
 Failure message (JSON):
 
@@ -118,7 +118,7 @@ The tester finds the file to inspect via `documents/{document_id}/original.pdf`,
 
 ### Error codes
 
-- Each module lists its error codes in its own spec: `text-extractor/specs/overview.md` (Errors). Other modules add theirs when their specs are written.
+- Each module lists its error codes in its own spec: `text-extractor/specs/overview.md`, `fields-extractor/specs/overview.md`, `integrator/specs/overview.md` (Errors).
 - Codes are `snake_case`, stable once published, and unique within a module.
 - Generic codes have the same meaning in every module: `storage_unavailable` (object storage failing after retries), `internal_error` (unexpected exception).
 - A failure is identified by the pair (`stage`, `error_code`).

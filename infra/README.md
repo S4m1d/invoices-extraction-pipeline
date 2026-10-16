@@ -13,4 +13,5 @@ To set up (from the contract):
 - Dead-lettering: exchange `dlx`, `<queue>.dlq` queues bound to it, and the `dead-letter` policy (contract, Dead-lettering).
 - Buckets `invoices`, `text-extractor-failures`, `fields-extractor-failures` and `fields-extractor-usage` (contract, Object storage layout).
 - `ANTHROPIC_API_KEY` for `fields-extractor` from a gitignored `.env` (`env_file:`), with a tracked `.env.example` (see `fields-extractor/specs/llm-providers.md`).
+- PostgreSQL: database `invoices`, role `integrator` (owner; the integrator applies migrations) and read-only role `tester` (see `integrator/specs/data-model.md`, Access). Created before the integrator starts.
 - MinIO image: official images can no longer be pulled anonymously from Docker Hub or quay.io; decide how to obtain one.
