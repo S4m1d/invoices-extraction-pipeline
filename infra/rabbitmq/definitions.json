@@ -1,0 +1,26 @@
+{
+  "vhosts": [{ "name": "/" }],
+  "exchanges": [
+    { "name": "dlx", "vhost": "/", "type": "direct", "durable": true, "auto_delete": false, "internal": false, "arguments": {} }
+  ],
+  "queues": [
+    { "name": "documents.ingested", "vhost": "/", "durable": true, "auto_delete": false, "arguments": {} },
+    { "name": "documents.text_extracted", "vhost": "/", "durable": true, "auto_delete": false, "arguments": {} },
+    { "name": "documents.fields_extracted", "vhost": "/", "durable": true, "auto_delete": false, "arguments": {} },
+    { "name": "documents.failed", "vhost": "/", "durable": true, "auto_delete": false, "arguments": {} },
+    { "name": "documents.ingested.dlq", "vhost": "/", "durable": true, "auto_delete": false, "arguments": {} },
+    { "name": "documents.text_extracted.dlq", "vhost": "/", "durable": true, "auto_delete": false, "arguments": {} },
+    { "name": "documents.fields_extracted.dlq", "vhost": "/", "durable": true, "auto_delete": false, "arguments": {} }
+  ],
+  "bindings": [
+    { "source": "dlx", "vhost": "/", "destination": "documents.ingested.dlq", "destination_type": "queue", "routing_key": "documents.ingested", "arguments": {} },
+    { "source": "dlx", "vhost": "/", "destination": "documents.text_extracted.dlq", "destination_type": "queue", "routing_key": "documents.text_extracted", "arguments": {} },
+    { "source": "dlx", "vhost": "/", "destination": "documents.fields_extracted.dlq", "destination_type": "queue", "routing_key": "documents.fields_extracted", "arguments": {} }
+  ],
+  "policies": [
+    {
+      "vhost": "/", "name": "dead-letter", "pattern": "^documents\\.(ingested|text_extracted|fields_extracted)$",
+      "apply-to": "queues", "priority": 0, "definition": { "dead-letter-exchange": "dlx" }
+    }
+  ]
+}

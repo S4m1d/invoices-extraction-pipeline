@@ -1,0 +1,18 @@
+# Fake-LLM mode (infra/README.md, LLM modes): `make up-fake`. No API cost; every invoice gets
+# the canned extraction of inv_00000029.
+services:
+  fake-anthropic:
+    image: python:3.13-slim
+    restart: unless-stopped
+    working_dir: /app
+    volumes:
+      - ../fields-extractor/src/tests:/app/tests:ro
+    command: [python, -m, tests.fake_anthropic, --port, "8089"]
+
+  fields-extractor:
+    env_file: !reset []
+    environment:
+      ANTHROPIC_API_KEY: fake
+      ANTHROPIC_BASE_URL: http://fake-anthropic:8089
+    depends_on:
+      fake-anthropic: { condition: service_started }
