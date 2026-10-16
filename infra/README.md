@@ -16,6 +16,7 @@ One Compose project, `infra/docker-compose.yml`:
 | `minio` | MinIO, see MinIO image | Object storage |
 | `postgres` | `postgres:17` | Database `invoices` |
 | `fake-anthropic` | `python:3.13-slim` (fake-LLM mode only) | Fake Anthropic API from `fields-extractor/src/tests/fake_anthropic.py` |
+| `init-rabbitmq` | `rabbitmq:4.2-management` | One-shot: imports the queues, exchange and policy, then exits |
 | `init-minio` | `cgr.dev/chainguard/minio-client` (digest-pinned) | One-shot: creates the buckets, then exits |
 | `ingestor` | built from `ingestor/` | |
 | `text-extractor` | built from `text-extractor/` | |
@@ -32,14 +33,14 @@ The official images can no longer be pulled anonymously (Docker Hub `minio/minio
 
 All idempotent: running `up` again changes nothing.
 
-- **RabbitMQ**: the topology from the contract is loaded at boot from `infra/rabbitmq/definitions.json` (`load_definitions` in `rabbitmq.conf`): vhost `/`, queues `documents.ingested`, `documents.text_extracted`, `documents.fields_extracted`, `documents.failed` (durable, no arguments), exchange `dlx`, the three `.dlq` queues and their bindings, and policy `dead-letter`. The user comes from `RABBITMQ_DEFAULT_USER` / `RABBITMQ_DEFAULT_PASS`.
+- **RabbitMQ**: the user comes from `RABBITMQ_DEFAULT_USER` / `RABBITMQ_DEFAULT_PASS` (created on an empty data directory). The topology from the contract is in `infra/rabbitmq/definitions.json`: vhost `/`, queues `documents.ingested`, `documents.text_extracted`, `documents.fields_extracted`, `documents.failed` (durable, no arguments), exchange `dlx`, the three `.dlq` queues and their bindings, and policy `dead-letter`. One-shot `init-rabbitmq` imports it through the management API (`rabbitmqadmin definitions import`) once RabbitMQ is healthy; services start after it completed. Not loaded at boot (`load_definitions`): with boot-time definitions RabbitMQ skips creating the default user, so nobody could log in.
 - **MinIO**: `init-minio` waits for MinIO, creates buckets `invoices`, `text-extractor-failures`, `fields-extractor-failures`, `fields-extractor-usage` (`mc mb --ignore-existing`) and exits. Services that use MinIO start after it completed.
 - **PostgreSQL**: an init script in `infra/postgres/` (run by the image only on an empty data directory) creates roles `integrator` (login, owner of database `invoices`) and `tester` (login, read-only; grants come from the integrator's migration), with passwords from the environment. Schema: the integrator's migrations. Because the script runs only once, changing these passwords later needs `make reset` or a manual `ALTER ROLE`.
 
 ## Startup order and restarts
 
-- `depends_on` with conditions: services wait for `rabbitmq`, `minio`, `postgres` to be healthy and for `init-minio` to complete; `integrator` additionally waits for `postgres`.
-- Health checks: the services' own (`/healthz` via their `healthcheck` subcommand); `rabbitmq-diagnostics ping`, MinIO `/minio/health/live`, `pg_isready` for the infrastructure.
+- `depends_on` with conditions: services wait for `rabbitmq` and `minio` to be healthy and for `init-rabbitmq` and `init-minio` to complete; `integrator` additionally waits for `postgres`.
+- Health checks: the services' own (`/healthz` via their `healthcheck` subcommand); `rabbitmq-diagnostics check_port_connectivity`, MinIO `/minio/health/live` (the image has no curl or grep: an HTTP/1.1 request through bash's `/dev/tcp`), `pg_isready` for the infrastructure.
 - `restart: unless-stopped` for all long-running containers. Services handle dependency outages themselves (reconnect, pause), so a restart is only for crashes.
 
 ## Configuration and secrets
@@ -86,6 +87,12 @@ Named volumes keep data across `down`/`up`: `rabbitmq-data`, `minio-data`, `post
 | `make reset` | `down` plus removing the volumes (all data lost) |
 | `make ps`, `make logs` | Status, logs (`make logs s=integrator` for one service) |
 | `make smoke` | Upload `inv_00000029` through the ingestor API, wait until its row is in PostgreSQL and compare key fields with its golden values. With the real LLM about $0.0004 per run; free in fake mode (the canned extraction is exactly this invoice's golden data) |
+
+Notes:
+
+- `make up` and `make up-fake` switch modes in place: each removes the other mode's containers (`--remove-orphans`), and only `fields-extractor` is recreated.
+- Images are built without default build attestations (`BUILDX_NO_DEFAULT_ATTESTATIONS=1`), so an unchanged module builds to the same image ID and a repeated `up` recreates nothing.
+- The modules' integration and smoke tests can run against this stack: use the credentials from `infra/.env` (for example `AMQP_URL=amqp://$RABBITMQ_USER:$RABBITMQ_PASSWORD@localhost:5672/`).
 
 ## Open questions
 
