@@ -117,4 +117,4 @@ Decided in ADR 0008. Field-by-field mapping from golden to the extraction schema
 
 ## Open questions
 
-- OPEN: comparison rules (see `tester/backend/specs/overview.md`).
+- Comparison rules: see [`comparison.md`](comparison.md).

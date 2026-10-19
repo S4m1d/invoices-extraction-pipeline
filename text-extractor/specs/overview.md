@@ -97,7 +97,7 @@ One message at a time per process (prefetch 1). Throughput is scaled by running 
 
 ## Health
 
-HTTP `GET /healthz` on `TEXT_EXTRACTOR_HTTP_ADDR` (default `:8080`), same shape as the ingestor's: `200 {"status":"ok"}` when the RabbitMQ connection is open and the buckets `invoices` and `text-extractor-failures` exist, else `503 {"status":"unavailable","failing":[...]}`. Used by the Docker healthcheck.
+HTTP `GET /healthz` on `TEXT_EXTRACTOR_HTTP_ADDR` (default `:8080`), same shape as the ingestor's (`/specs/pipeline-contracts.md`, Health endpoint, including `errors` with a reason per failing check): `200 {"status":"ok"}` when the RabbitMQ connection is open and the buckets `invoices` and `text-extractor-failures` exist, else `503 {"status":"unavailable","failing":[...]}`. Used by the Docker healthcheck.
 
 ## Logging and correlation
 

@@ -123,6 +123,15 @@ The tester finds the file to inspect via `documents/{document_id}/original.pdf`,
 - Generic codes have the same meaning in every module: `storage_unavailable` (object storage failing after retries), `internal_error` (unexpected exception).
 - A failure is identified by the pair (`stage`, `error_code`).
 
+## Health endpoint
+
+Every service serves `GET /healthz` with the same response shape. The checks per service are in its spec.
+
+- `200` with `{"status": "ok"}` when every check passes.
+- `503` with `{"status": "unavailable", "failing": ["<check>", ...], "errors": {"<check>": "<reason>", ...}}` otherwise. `errors` has one human-readable reason per failing check, for example `{"llm": "llm_daily_budget_reached (paused): spent $10.0012 of $10.00 today (UTC)"}`. Reasons are for display (the tester shows them while the pipeline waits) and must not contain secrets.
+
+The tester polls these endpoints to tell a waiting pipeline from a stuck one (`tester/backend/specs/overview.md`, Completion).
+
 ## Extracted JSON schema
 
 Owned by `fields-extractor` (see `fields-extractor/specs/extraction-schema.md`). Stored as `extracted.json`, consumed by `integrator`.

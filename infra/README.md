@@ -22,6 +22,7 @@ One Compose project, `infra/docker-compose.yml`:
 | `text-extractor` | built from `text-extractor/` | |
 | `fields-extractor` | built from `fields-extractor/` | |
 | `integrator` | built from `integrator/` | |
+| `tester` | built from `tester/` | Testing client: backend and frontend in one container (`tester/backend/specs/overview.md`) |
 
 Service images are built from each module's `Dockerfile` (`build: ../<module>`) and tagged `invoices/<module>`. One replica each; more with `docker compose up --scale text-extractor=3` (the services support it: prefetch 1, shared spend counter, advisory-locked migrations).
 
@@ -70,10 +71,13 @@ Published on `127.0.0.1` only (not reachable from other machines):
 | 9000 | MinIO S3 API | tester (originals of failed documents), tests |
 | 9001 | MinIO console | inspection |
 | 5432 | PostgreSQL | tester (read-only role), tests |
+| 8090 | tester UI and API | the person running tests |
 
 Service health ports stay inside the Compose network.
 
-Named volumes keep data across `down`/`up`: `rabbitmq-data`, `minio-data`, `postgres-data`. `make reset` removes them.
+Named volumes keep data across `down`/`up`: `rabbitmq-data`, `minio-data`, `postgres-data`, `tester-data` (run history).
+
+Datasets: Docker does not resolve the `tester/datasets` symlink inside bind mounts, so the `tester` container mounts its target, `DATASETS_DIR` in `infra/.env`, read-only at `/datasets`. `make reset` removes them.
 
 ## Usage
 
@@ -92,6 +96,7 @@ Notes:
 
 - `make up` and `make up-fake` switch modes in place: each removes the other mode's containers (`--remove-orphans`), and only `fields-extractor` is recreated.
 - Images are built without default build attestations (`BUILDX_NO_DEFAULT_ATTESTATIONS=1`), so an unchanged module builds to the same image ID and a repeated `up` recreates nothing.
+- The `tester` consumes `documents.failed`. The modules' smoke tests also read failures from that queue, so run them with the tester stopped (`docker compose stop tester`).
 - The modules' integration and smoke tests can run against this stack: use the credentials from `infra/.env` (for example `AMQP_URL=amqp://$RABBITMQ_USER:$RABBITMQ_PASSWORD@localhost:5672/`).
 
 ## Open questions
