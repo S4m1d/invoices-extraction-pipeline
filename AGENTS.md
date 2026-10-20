@@ -4,7 +4,7 @@ Instructions for AI coding agents working in this repository.
 
 ## Project
 
-Invoice data extraction pipeline (study project, Spec-Driven Development). Overview: [`README.md`](README.md). Current stage: skeleton and specs; implementation happens module by module after its spec is approved.
+Invoice data extraction pipeline (study project, Spec-Driven Development). Overview: [`README.md`](README.md). Current stage: first raw MVP version; all modules are implemented. Changes still go spec first: update the spec, get it approved, then change the code.
 
 ## Read first
 
@@ -31,7 +31,7 @@ Invoice data extraction pipeline (study project, Spec-Driven Development). Overv
 | Fields extractor | `fields-extractor/` | Python, Pydantic, Anthropic SDK (provider abstraction) | `fields-extractor/specs/` |
 | Integrator | `integrator/` | Go, PostgreSQL | `integrator/specs/` |
 | Tester backend | `tester/backend/` | Rust, DuckDB, SQLite, PostgreSQL | `tester/backend/specs/` |
-| Tester frontend | `tester/frontend/` | JS, React | `tester/frontend/specs/` |
+| Tester frontend | `tester/frontend/` | TypeScript, React | `tester/frontend/specs/` |
 | Infrastructure | `infra/` | Docker | `infra/README.md` |
 
 Each module keeps its code in `src/` and its specification in `specs/`.

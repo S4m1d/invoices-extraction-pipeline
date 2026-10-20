@@ -1,0 +1,155 @@
+# Pipeline stack (infra/README.md). Secrets: infra/.env (see .env.example) and fields-extractor/.env.
+name: invoices
+
+x-service: &service
+  restart: unless-stopped
+  depends_on: &deps
+    rabbitmq: { condition: service_healthy }
+    minio: { condition: service_healthy }
+    init-minio: { condition: service_completed_successfully }
+    init-rabbitmq: { condition: service_completed_successfully }
+
+x-env: &env
+  AMQP_URL: amqp://${RABBITMQ_USER}:${RABBITMQ_PASSWORD}@rabbitmq:5672/
+  MINIO_ENDPOINT: minio:9000
+  MINIO_ACCESS_KEY: ${MINIO_ROOT_USER}
+  MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD}
+
+services:
+  rabbitmq:
+    image: rabbitmq:4.2-management
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD}
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    ports:
+      - 127.0.0.1:5672:5672
+      - 127.0.0.1:15672:15672
+    healthcheck:
+      test: [CMD, rabbitmq-diagnostics, -q, check_port_connectivity]
+      interval: 5s
+      timeout: 10s
+      retries: 30
+
+  init-rabbitmq:
+    # Imports the contract's topology through the management API. Not load_definitions at boot:
+    # with boot-time definitions RabbitMQ skips creating the default user.
+    image: rabbitmq:4.2-management
+    restart: on-failure
+    depends_on:
+      rabbitmq: { condition: service_healthy }
+    volumes:
+      - ./rabbitmq/definitions.json:/definitions.json:ro
+    entrypoint: [rabbitmqadmin, --host, rabbitmq, --port, "15672",
+                 --username, "${RABBITMQ_USER}", --password, "${RABBITMQ_PASSWORD}"]
+    command: [definitions, import, --file, /definitions.json, --non-interactive]
+
+  minio:
+    # ADR 0013: Chainguard build of the official MinIO release, pinned by digest.
+    image: cgr.dev/chainguard/minio@sha256:2136d593beacf4461187035eca949fe49abd589d5079735025c711ca58fee0c8
+    restart: unless-stopped
+    command: [server, /data, --console-address, ":9001"]
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    volumes:
+      - minio-data:/data
+    ports:
+      - 127.0.0.1:9000:9000
+      - 127.0.0.1:9001:9001
+    healthcheck:
+      # No curl or grep in the image: bash's /dev/tcp asks for the liveness endpoint, read checks the status line.
+      test: [CMD, bash, -c, 'exec 3<>/dev/tcp/127.0.0.1/9000 && printf "GET /minio/health/live HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n" >&3 && read -r status <&3 && [[ $$status == *" 200 "* ]]']
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  init-minio:
+    image: cgr.dev/chainguard/minio-client@sha256:d8a93c5d335509ff353774eefec8f82fa2a2a975e800139702232d8be3dbe6b9
+    restart: on-failure
+    depends_on:
+      minio: { condition: service_healthy }
+    environment:
+      MC_HOST_pipeline: http://${MINIO_ROOT_USER}:${MINIO_ROOT_PASSWORD}@minio:9000
+    command: [mb, --ignore-existing, pipeline/invoices, pipeline/text-extractor-failures,
+              pipeline/fields-extractor-failures, pipeline/fields-extractor-usage]
+
+  postgres:
+    image: postgres:17
+    restart: unless-stopped
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      INTEGRATOR_DB_PASSWORD: ${INTEGRATOR_DB_PASSWORD}
+      TESTER_DB_PASSWORD: ${TESTER_DB_PASSWORD}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./postgres:/docker-entrypoint-initdb.d:ro
+    ports:
+      - 127.0.0.1:5432:5432
+    healthcheck:
+      test: [CMD, pg_isready, -U, postgres, -d, invoices]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  ingestor:
+    <<: *service
+    build: ../ingestor
+    image: invoices/ingestor
+    environment:
+      <<: *env
+    ports:
+      - 127.0.0.1:8080:8080
+
+  text-extractor:
+    <<: *service
+    build: ../text-extractor
+    image: invoices/text-extractor
+    environment:
+      <<: *env
+
+  fields-extractor:
+    <<: *service
+    build: ../fields-extractor
+    image: invoices/fields-extractor
+    env_file:
+      - ../fields-extractor/.env  # ANTHROPIC_API_KEY
+    environment:
+      <<: *env
+      LLM_DAILY_BUDGET_USD: ${LLM_DAILY_BUDGET_USD:-10}
+
+  integrator:
+    <<: *service
+    build: ../integrator
+    image: invoices/integrator
+    depends_on:
+      <<: *deps
+      postgres: { condition: service_healthy }
+    environment:
+      <<: *env
+      DATABASE_URL: postgres://integrator:${INTEGRATOR_DB_PASSWORD}@postgres:5432/invoices
+
+  tester:
+    <<: *service
+    build: ../tester
+    image: invoices/tester
+    depends_on:
+      <<: *deps
+      postgres: { condition: service_healthy }
+    environment:
+      <<: *env
+      DATABASE_URL: postgres://tester:${TESTER_DB_PASSWORD}@postgres:5432/invoices
+      LLM_DAILY_BUDGET_USD: ${LLM_DAILY_BUDGET_USD:-10}
+    volumes:
+      - tester-data:/data
+      - ${DATASETS_DIR:?set DATASETS_DIR in infra/.env}:/datasets:ro
+    ports:
+      - 127.0.0.1:8090:8090
+
+volumes:
+  rabbitmq-data:
+  minio-data:
+  postgres-data:
+  tester-data:
