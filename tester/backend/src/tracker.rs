@@ -143,7 +143,7 @@ async fn tick(app: &Arc<App>, unmatched: &Unmatched, waiting: bool, elapsed: Dur
                 let golden = app.golden(&t.dataset).await?;
                 match golden.get(&t.invoice_id) {
                     Some(g) => {
-                        let c = compare::compare(invoice, &g.invoice);
+                        let c = compare::compare(invoice, &g.invoice, g.unit_price_printed);
                         store::store_comparison(&app.db, t, invoice, model.clone(), prompt.clone(), &c).await?;
                     }
                     None => store::mark_error(&app.db, &t.run_id, &t.invoice_id, "tester", "no_golden_record", "invoice not in golden set").await?,

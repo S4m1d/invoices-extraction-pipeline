@@ -102,8 +102,10 @@ pub struct Comparison {
     pub passed: bool,
 }
 
-/// Compares extracted with golden. Golden lines must be the top-level ones; both are ordered by line_no here.
-pub fn compare(extracted: &Invoice, golden: &Invoice) -> Comparison {
+/// Compares extracted with golden. Golden lines must be the top-level ones in printed order (golden.rs);
+/// extracted lines are ordered by line_no here. Without a printed unit price, a null extracted
+/// unit_price is not compared (specs/comparison.md, Lines).
+pub fn compare(extracted: &Invoice, golden: &Invoice, unit_price_printed: bool) -> Comparison {
     let header: [(&'static str, Kind, &Value, &Value); 9] = [
         ("supplier_name", Kind::Text, &extracted.supplier_name, &golden.supplier_name),
         ("recipient_name", Kind::Text, &extracted.recipient_name, &golden.recipient_name),
@@ -121,9 +123,8 @@ pub fn compare(extracted: &Invoice, golden: &Invoice) -> Comparison {
         .collect();
 
     let mut ext = extracted.lines.clone();
-    let mut gold = golden.lines.clone();
+    let gold = &golden.lines;
     ext.sort_by_key(|l| l.line_no);
-    gold.sort_by_key(|l| l.line_no);
     let mut lines = Vec::new();
     for i in 0..ext.len().max(gold.len()) {
         let position = i as i64 + 1;
@@ -138,7 +139,9 @@ pub fn compare(extracted: &Invoice, golden: &Invoice) -> Comparison {
                 let p = Some(position);
                 fields.push(field(p, "description", Kind::Text, &x.description, &g.description));
                 fields.push(field(p, "quantity", Kind::Decimal, &x.quantity, &g.quantity));
-                fields.push(field(p, "unit_price", Kind::UnitPrice, &x.unit_price, &g.unit_price));
+                if unit_price_printed || x.unit_price.is_some() {
+                    fields.push(field(p, "unit_price", Kind::UnitPrice, &x.unit_price, &g.unit_price));
+                }
                 fields.push(field(p, "amount", Kind::Decimal, &x.amount, &g.amount));
             }
             (None, Some(g)) => lines.push(LineResult {
@@ -242,7 +245,7 @@ mod tests {
 
     #[test]
     fn identical_passes() {
-        let c = compare(&example(), &example());
+        let c = compare(&example(), &example(), true);
         assert!(c.passed);
         assert_eq!(c.fields.len(), 9 + 3 * 4);
     }
@@ -251,9 +254,9 @@ mod tests {
     fn text_trims_and_collapses_but_keeps_case() {
         let mut x = example();
         x.recipient_name = v("  Vireo   Labs ");
-        assert!(compare(&x, &example()).passed);
+        assert!(compare(&x, &example(), true).passed);
         x.recipient_name = v("vireo labs");
-        let c = compare(&x, &example());
+        let c = compare(&x, &example(), true);
         assert_eq!(outcome(&c, None, "recipient_name"), Outcome::Mismatch);
         assert!(!c.passed);
     }
@@ -264,7 +267,7 @@ mod tests {
         let mut g = example();
         g.supplier_name = v("Caf\u{e9}"); // precomposed é
         x.supplier_name = v("Cafe\u{301}"); // e + combining acute
-        assert_eq!(outcome(&compare(&x, &g), None, "supplier_name"), Outcome::Match);
+        assert_eq!(outcome(&compare(&x, &g, true), None, "supplier_name"), Outcome::Match);
     }
 
     #[test]
@@ -272,9 +275,9 @@ mod tests {
         let mut x = example();
         x.grand_total = v("928.860");
         x.lines[0].quantity = v("1.0");
-        assert!(compare(&x, &example()).passed);
+        assert!(compare(&x, &example(), true).passed);
         x.grand_total = v("928.87");
-        assert_eq!(outcome(&compare(&x, &example()), None, "grand_total"), Outcome::Mismatch);
+        assert_eq!(outcome(&compare(&x, &example(), true), None, "grand_total"), Outcome::Mismatch);
     }
 
     #[test]
@@ -283,38 +286,66 @@ mod tests {
         let mut x = example();
         g.lines[0].unit_price = v("0.1290");
         x.lines[0].unit_price = v("0.13");
-        assert_eq!(outcome(&compare(&x, &g), Some(1), "unit_price"), Outcome::Match);
+        assert_eq!(outcome(&compare(&x, &g, true), Some(1), "unit_price"), Outcome::Match);
         g.lines[0].unit_price = v("0.1250"); // half up -> 0.13
-        assert_eq!(outcome(&compare(&x, &g), Some(1), "unit_price"), Outcome::Match);
+        assert_eq!(outcome(&compare(&x, &g, true), Some(1), "unit_price"), Outcome::Match);
         g.lines[0].unit_price = v("0.1249");
-        assert_eq!(outcome(&compare(&x, &g), Some(1), "unit_price"), Outcome::Mismatch);
+        assert_eq!(outcome(&compare(&x, &g, true), Some(1), "unit_price"), Outcome::Mismatch);
         // only unit_price is rounded; amounts are exact
         g = example();
         g.lines[0].amount = v("268.2100");
         x = example();
         x.lines[0].amount = v("268.21");
-        assert_eq!(outcome(&compare(&x, &g), Some(1), "amount"), Outcome::Match);
+        assert_eq!(outcome(&compare(&x, &g, true), Some(1), "amount"), Outcome::Match);
         g.lines[0].amount = v("268.2149");
-        assert_eq!(outcome(&compare(&x, &g), Some(1), "amount"), Outcome::Mismatch);
+        assert_eq!(outcome(&compare(&x, &g, true), Some(1), "amount"), Outcome::Mismatch);
     }
 
     #[test]
     fn missing_fails_and_unexpected_fails() {
         let mut x = example();
-        x.lines[1].unit_price = None; // telecom case: not printed
-        let c = compare(&x, &example());
+        x.lines[1].unit_price = None;
+        let c = compare(&x, &example(), true);
         assert_eq!(outcome(&c, Some(2), "unit_price"), Outcome::Missing);
         assert!(!c.passed);
 
         let mut g = example();
         g.due_date = None;
-        let c = compare(&example(), &g);
+        let c = compare(&example(), &g, true);
         assert_eq!(outcome(&c, None, "due_date"), Outcome::Unexpected);
         assert!(!c.passed);
 
         let mut both = example();
         both.due_date = None;
-        assert!(compare(&both, &both).passed); // both null = match
+        assert!(compare(&both, &both, true).passed); // both null = match
+    }
+
+    #[test]
+    fn unit_price_not_printed_is_not_compared_when_null() {
+        let mut x = example();
+        x.lines[1].unit_price = None;
+        let c = compare(&x, &example(), false);
+        assert!(!c.fields.iter().any(|f| f.position == Some(2) && f.field == "unit_price"));
+        assert!(c.passed);
+
+        x.lines[1].unit_price = v("99.00"); // extracted anyway: compared as usual
+        let c = compare(&x, &example(), false);
+        assert_eq!(outcome(&c, Some(2), "unit_price"), Outcome::Mismatch);
+        assert!(!c.passed);
+    }
+
+    #[test]
+    fn golden_lines_keep_their_given_order() {
+        let mut g = example();
+        g.lines.swap(0, 2); // printed order differs from golden line_no order
+        let mut x = example();
+        x.lines.swap(0, 2);
+        for (i, l) in x.lines.iter_mut().enumerate() {
+            l.line_no = i as i64 + 1;
+        }
+        let c = compare(&x, &g, true);
+        assert!(c.passed);
+        assert_eq!(c.lines[0].golden_line_no, Some(3));
     }
 
     #[test]
@@ -323,7 +354,7 @@ mod tests {
         x.lines.swap(0, 1);
         x.lines[0].line_no = 1;
         x.lines[1].line_no = 2;
-        let c = compare(&x, &example());
+        let c = compare(&x, &example(), true);
         assert_eq!(outcome(&c, Some(1), "description"), Outcome::Mismatch);
         assert!(!c.passed);
     }
@@ -332,21 +363,21 @@ mod tests {
     fn line_order_follows_line_no_not_storage_order() {
         let mut x = example();
         x.lines.reverse(); // same line_no values, stored in another order
-        assert!(compare(&x, &example()).passed);
+        assert!(compare(&x, &example(), true).passed);
     }
 
     #[test]
     fn missing_and_extra_lines() {
         let mut x = example();
         x.lines.pop();
-        let c = compare(&x, &example());
+        let c = compare(&x, &example(), true);
         assert_eq!(c.lines[2].outcome, LineOutcome::Missing);
         assert_eq!(c.lines[2].golden_line_no, Some(3));
         assert!(!c.passed);
 
         let mut x = example();
         x.lines.push(line(4, "Shipping & Handling", None, None, "34.94"));
-        let c = compare(&x, &example());
+        let c = compare(&x, &example(), true);
         assert_eq!(c.lines[3].outcome, LineOutcome::Extra);
         assert_eq!(c.lines[3].extracted_line_no, Some(4));
         assert!(!c.passed);
