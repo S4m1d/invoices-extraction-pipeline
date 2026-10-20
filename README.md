@@ -9,7 +9,7 @@ A study project: a pipeline that extracts structured data from invoice documents
 
 ## Status
 
-Skeleton and specs stage. No implementation yet.
+First raw MVP version: all modules are implemented and the whole pipeline, with the testing client, runs in Docker Compose (see [`infra/`](infra/)). Known limitations are recorded in the module specs.
 
 ## Architecture
 
@@ -32,7 +32,7 @@ Pipeline steps: ingestion -> layout analysis + text extraction -> fields extract
 | `fields-extractor/` | Markdown -> structured JSON via LLM | Python, Pydantic, Anthropic SDK |
 | `integrator/` | JSON -> procurement tables | Go, PostgreSQL |
 | `tester/backend/` | Test orchestration, evaluation against golden sets | Rust, DuckDB, SQLite, PostgreSQL |
-| `tester/frontend/` | Web UI for test runs | JS, React |
+| `tester/frontend/` | Web UI for test runs | TypeScript, React |
 | `infra/` | Docker Compose, RabbitMQ, MinIO, PostgreSQL setup | Docker |
 | `tester/datasets` | Symlink to the directory with docsynth datasets (`run-001`, ...) | - |
 | `specs/` | Cross-module contracts (queues, storage, message formats) | - |
