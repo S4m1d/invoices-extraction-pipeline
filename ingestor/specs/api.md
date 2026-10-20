@@ -96,7 +96,7 @@ Whenever the generated ID is used even though the client may have sent its own, 
 Used by the Docker healthcheck. RabbitMQ is reachable when the ingestor can connect and the queue `documents.ingested` exists; MinIO is reachable when the bucket `invoices` exists. Each check times out after 3 s.
 
 - `200 OK` with `{ "status": "ok" }` when the process is up and both RabbitMQ and MinIO are reachable.
-- `503 Service Unavailable` with `{ "status": "unavailable", "failing": ["rabbitmq" | "minio", ...] }` otherwise.
+- `503 Service Unavailable` with `{ "status": "unavailable", "failing": ["rabbitmq" | "minio", ...], "errors": { "<check>": "<reason>" } }` otherwise (shape: `/specs/pipeline-contracts.md`, Health endpoint).
 
 ## Not provided
 

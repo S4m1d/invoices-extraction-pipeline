@@ -131,7 +131,25 @@ services:
       <<: *env
       DATABASE_URL: postgres://integrator:${INTEGRATOR_DB_PASSWORD}@postgres:5432/invoices
 
+  tester:
+    <<: *service
+    build: ../tester
+    image: invoices/tester
+    depends_on:
+      <<: *deps
+      postgres: { condition: service_healthy }
+    environment:
+      <<: *env
+      DATABASE_URL: postgres://tester:${TESTER_DB_PASSWORD}@postgres:5432/invoices
+      LLM_DAILY_BUDGET_USD: ${LLM_DAILY_BUDGET_USD:-10}
+    volumes:
+      - tester-data:/data
+      - ${DATASETS_DIR:?set DATASETS_DIR in infra/.env}:/datasets:ro
+    ports:
+      - 127.0.0.1:8090:8090
+
 volumes:
   rabbitmq-data:
   minio-data:
   postgres-data:
+  tester-data:

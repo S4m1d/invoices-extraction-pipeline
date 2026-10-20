@@ -51,7 +51,8 @@ def test_healthz(serve, rmq, minio, status, failing):
     base = serve({"rabbitmq": rmq, "minio": minio})
     code, body = get(base + "/healthz")
     assert code == status
-    assert body == ({"status": "ok"} if failing is None else {"status": "unavailable", "failing": failing})
+    expected = {"status": "unavailable", "failing": failing, "errors": {name: "down" for name in failing or []}}
+    assert body == ({"status": "ok"} if failing is None else expected)
 
 
 def test_unknown_path(serve):

@@ -69,7 +69,7 @@ Serialization failures and deadlocks are retried once in place before they count
 
 ## Health, logging, configuration
 
-- `/healthz`: `rabbitmq`, `minio` (bucket `invoices`), `postgres` (`SELECT 1` with a 3 s timeout). Health failures are logged when the set of failing dependencies changes.
+- `/healthz`: `rabbitmq`, `minio` (bucket `invoices`), `postgres` (`SELECT 1` with a 3 s timeout); response shape with `errors` per `/specs/pipeline-contracts.md`, Health endpoint. Health failures are logged when the set of failing dependencies changes.
 - Logs: JSON (`log/slog`) with `correlation_id` and `document_id` on every entry about a message; one summary entry per message (`result`, `lines`, `duration_ms`).
 - `X-Correlation-ID` on MinIO requests (contract). PostgreSQL has no per-request header; the correlation ID is in the logs and in the `invoices` row (see `data-model.md`).
 

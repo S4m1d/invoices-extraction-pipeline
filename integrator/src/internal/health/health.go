@@ -58,7 +58,8 @@ func Handler(checks []Check, log *slog.Logger) http.Handler {
 		w.Header().Set("Content-Type", "application/json")
 		if len(failing) > 0 {
 			w.WriteHeader(http.StatusServiceUnavailable)
-			_ = json.NewEncoder(w).Encode(map[string]any{"status": "unavailable", "failing": failing})
+			// Shape: /specs/pipeline-contracts.md, Health endpoint.
+			_ = json.NewEncoder(w).Encode(map[string]any{"status": "unavailable", "failing": failing, "errors": details})
 			return
 		}
 		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})

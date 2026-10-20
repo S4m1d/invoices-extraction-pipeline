@@ -90,7 +90,7 @@ Two kinds of limit pause the worker instead of failing documents. Neither is ret
 Behaviour, the same for both:
 
 1. The message is returned to the queue (`basic.nack` with requeue), so it keeps its place at the front, and the worker stops consuming. Work already done for the document (for example a first attempt before the feedback retry) is discarded.
-2. `/healthz` reports `llm` as failing with the code and reason; one `ERROR` log entry is written.
+2. `/healthz` reports `llm` as failing, with the code and reason in its `errors` object (`/specs/pipeline-contracts.md`, Health endpoint); one `ERROR` log entry is written.
 3. Every `LLM_LIMIT_CHECK_INTERVAL` seconds (default `120`) the check runs; failed checks are logged at `DEBUG`.
 4. If a check passes, an `INFO` entry is logged, `/healthz` is healthy again and consuming resumes. The returned message is delivered first, so processing continues with the document that hit the limit.
 5. If `LLM_LIMIT_MAX_CHECKS` checks (default `3`) fail in a row, the worker stops for good: no more checks or API calls, the message stays first in the queue, the process keeps running with `/healthz` failing (`stopped after 3 checks`), one `ERROR` entry is logged. A person raises the limit (in the Console, or `LLM_DAILY_BUDGET_USD`) and restarts the container.

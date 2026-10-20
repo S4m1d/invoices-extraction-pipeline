@@ -33,7 +33,8 @@ def make_server(host: str, port: int, checks: dict[str, Callable[[], None]]) -> 
                     log.info("health check ok again")
                 last_failing[0] = failing
             if failing:
-                return self._send(503, {"status": "unavailable", "failing": failing})
+                # shape: /specs/pipeline-contracts.md, Health endpoint
+                return self._send(503, {"status": "unavailable", "failing": failing, "errors": errors})
             self._send(200, {"status": "ok"})
 
         def _send(self, status: int, body: dict):

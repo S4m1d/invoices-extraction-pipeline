@@ -117,9 +117,11 @@ func (s *Server) fail(w http.ResponseWriter, r *http.Request, e *apiError) {
 	writeError(w, e, correlation.ID(r.Context()))
 }
 
+// healthBody is the shared /healthz shape (/specs/pipeline-contracts.md, Health endpoint).
 type healthBody struct {
-	Status  string   `json:"status"`
-	Failing []string `json:"failing,omitempty"`
+	Status  string            `json:"status"`
+	Failing []string          `json:"failing,omitempty"`
+	Errors  map[string]string `json:"errors,omitempty"`
 }
 
 func (s *Server) healthz(w http.ResponseWriter, r *http.Request) {
@@ -146,15 +148,17 @@ func (s *Server) healthz(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var failing []string
+	reasons := map[string]string{}
 	for i, c := range checks {
 		if errs[i] != nil {
 			failing = append(failing, c.name)
+			reasons[c.name] = errs[i].Error()
 			correlation.Logger(r.Context(), s.log).Warn("health check failed",
 				"dependency", c.name, "error", errs[i].Error())
 		}
 	}
 	if len(failing) > 0 {
-		writeJSON(w, http.StatusServiceUnavailable, healthBody{Status: "unavailable", Failing: failing})
+		writeJSON(w, http.StatusServiceUnavailable, healthBody{Status: "unavailable", Failing: failing, Errors: reasons})
 		return
 	}
 	writeJSON(w, http.StatusOK, healthBody{Status: "ok"})

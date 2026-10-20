@@ -9,7 +9,8 @@ A client app for testing the pipeline:
 - Can generate different load, with requests sent in parallel.
 - Shows the history of test runs.
 - The user selects which dataset to use for a run and can switch between all datasets found under `tester/datasets` (currently `run-001`).
-- The user can open a failed run and inspect where things went wrong, including the file the pipeline failed to process or processed incorrectly.
+- The user can open a failed run and inspect where things went wrong, including the file the pipeline failed to process or processed incorrectly, and the pipeline's intermediate files (layout markdown, extracted JSON, diagnostics).
+- Runs can be paused, resumed and stopped; several can run at once.
 
 ## Parts
 

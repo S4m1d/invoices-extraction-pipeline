@@ -16,15 +16,16 @@ def make_server(host: str, port: int, checks: dict[str, Callable[[], None]]) -> 
         def do_GET(self):
             if self.path != "/healthz":
                 return self._send(404, {"error": {"code": "not_found", "message": "unknown path"}})
-            failing = []
+            failing, errors = [], {}
             for name, check in checks.items():
                 try:
                     check()
                 except Exception as e:
                     failing.append(name)
+                    errors[name] = str(e)
                     log.warning("health check failed", extra={"dependency": name, "error": str(e)})
-            if failing:
-                return self._send(503, {"status": "unavailable", "failing": failing})
+            if failing:  # shape: /specs/pipeline-contracts.md, Health endpoint
+                return self._send(503, {"status": "unavailable", "failing": failing, "errors": errors})
             self._send(200, {"status": "ok"})
 
         def _send(self, status: int, body: dict):
