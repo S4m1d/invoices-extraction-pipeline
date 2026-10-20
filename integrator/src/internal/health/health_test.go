@@ -40,6 +40,9 @@ func TestStatus(t *testing.T) {
 		body["failing"].([]any)[0] != "rabbitmq" || body["failing"].([]any)[1] != "postgres" {
 		t.Fatalf("%d %v", code, body)
 	}
+	if errs := body["errors"].(map[string]any); errs["postgres"] != "postgres down" || errs["rabbitmq"] != "rabbitmq down" {
+		t.Fatalf("errors %v", body["errors"])
+	}
 	if code, _ := serve(h, "/other"); code != 404 {
 		t.Fatalf("unknown path: %d", code)
 	}

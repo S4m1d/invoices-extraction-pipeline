@@ -33,8 +33,9 @@ func TestRouting(t *testing.T) {
 }
 
 type healthResponse struct {
-	Status  string   `json:"status"`
-	Failing []string `json:"failing"`
+	Status  string            `json:"status"`
+	Failing []string          `json:"failing"`
+	Errors  map[string]string `json:"errors"`
 }
 
 func TestHealthz(t *testing.T) {
@@ -69,6 +70,9 @@ func TestHealthz(t *testing.T) {
 			for i := range h.Failing {
 				if h.Failing[i] != tt.wantFailing[i] {
 					t.Fatalf("failing %v, want %v", h.Failing, tt.wantFailing)
+				}
+				if h.Errors[h.Failing[i]] == "" {
+					t.Fatalf("no reason for %s in errors %v", h.Failing[i], h.Errors)
 				}
 			}
 		})
