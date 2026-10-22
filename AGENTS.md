@@ -42,4 +42,4 @@ Each module keeps its code in `src/` and its specification in `specs/`.
 - Everything runs in Docker containers.
 - Input is clean, text-based PDFs and light scans; scanned pages are OCRed inside `text-extractor` (`text-extractor/specs/ocr.md`). Do not add scan handling outside `text-extractor`.
 - LLM access goes through the provider abstraction; only Anthropic is implemented, other providers must fail explicitly.
-- Test datasets follow [`tester/backend/specs/dataset-format.md`](tester/backend/specs/dataset-format.md).
+- Test data comes from tester data sources ([`tester/backend/specs/data-sources.md`](tester/backend/specs/data-sources.md)): synthetic datasets follow [`tester/backend/specs/dataset-format.md`](tester/backend/specs/dataset-format.md); real documents have no golden set.

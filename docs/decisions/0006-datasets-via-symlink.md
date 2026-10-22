@@ -1,6 +1,6 @@
 # 0006. Datasets supplied through a symlinked directory
 
-- Status: accepted
+- Status: superseded by 0015
 - Date: 2026-10-13
 
 ## Context

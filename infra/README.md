@@ -48,6 +48,7 @@ All idempotent: running `up` again changes nothing.
 
 - `infra/.env` (gitignored; `infra/.env.example` tracked) holds the infrastructure passwords: RabbitMQ user, MinIO root user, PostgreSQL superuser, `integrator` and `tester` passwords. Compose substitutes them into the services' environment.
 - `ANTHROPIC_API_KEY` comes from `fields-extractor/.env` (`env_file:`), the same file the module's real-LLM tests use, so the key is kept in one place.
+- `infra/tester-sources.yaml` (gitignored; `infra/tester-sources.example.yaml` tracked) lists the tester's data sources with host paths (`tester/backend/specs/data-sources.md`). It replaces `DATASETS_DIR`.
 - Everything else uses the services' defaults (for example `LLM_DAILY_BUDGET_USD` 10); overrides go into `infra/.env`.
 
 ## Image versions
@@ -77,7 +78,9 @@ Service health ports stay inside the Compose network.
 
 Named volumes keep data across `down`/`up`: `rabbitmq-data`, `minio-data`, `postgres-data`, `tester-data` (run history).
 
-Datasets: Docker does not resolve the `tester/datasets` symlink inside bind mounts, so the `tester` container mounts its target, `DATASETS_DIR` in `infra/.env`, read-only at `/datasets`. `make reset` removes them.
+`make reset` removes them.
+
+Data sources: `make up` / `make up-fake` generate `infra/docker-compose.sources.yml` (gitignored) from `infra/tester-sources.yaml` with `tester sources-override`; it mounts each source read-only at `/sources/{name}` in the `tester` container and the YAML at `/config/sources.yaml`. A source path may be a symlink (Docker resolves the mount source). Details: `tester/backend/specs/data-sources.md`, Docker setup.
 
 ## Usage
 
@@ -85,7 +88,7 @@ Datasets: Docker does not resolve the `tester/datasets` symlink inside bind moun
 
 | Target | Does |
 |---|---|
-| `make up` | Build images and start everything (real LLM); waits until all are healthy |
+| `make up` | Build images, generate the data-source mounts, start everything (real LLM); waits until all are healthy |
 | `make up-fake` | Same with the fake LLM (no API cost) |
 | `make down` | Stop and remove containers (data kept) |
 | `make reset` | `down` plus removing the volumes (all data lost) |
