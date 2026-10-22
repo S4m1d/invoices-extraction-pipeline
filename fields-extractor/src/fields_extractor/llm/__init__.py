@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from importlib import resources
 from typing import Protocol
 
-PROMPT_VERSION = "v3"
+PROMPT_VERSION = "v4"
 
 
 def load_prompt(version: str = PROMPT_VERSION) -> str:
