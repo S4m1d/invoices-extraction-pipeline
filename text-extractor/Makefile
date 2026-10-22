@@ -11,7 +11,7 @@ lint:
 test:
 	cd src && $(UV) run pytest
 
-# On demand: converts every run-001 PDF (needs the tester/datasets symlink).
+# On demand: converts every run-001 PDF and, if tesseract is installed, every run003 scan (needs the tester/datasets symlink).
 corpus-test:
 	cd src && $(UV) run pytest -m corpus -v
 

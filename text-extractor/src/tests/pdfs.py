@@ -56,3 +56,44 @@ INVOICE = build(
 )
 
 EMPTY = build([[]])
+
+
+def scan(pages: int = 1) -> bytes:
+    """An image-only PDF, one gray full-page image per page (no text layer)."""
+    import io
+
+    from PIL import Image
+
+    images = [Image.new("L", (100, 140), 200) for _ in range(pages)]
+    buf = io.BytesIO()
+    images[0].save(buf, format="PDF", save_all=True, append_images=images[1:])
+    return buf.getvalue()
+
+
+def concat(*docs: bytes) -> bytes:
+    """Pages of all documents, in order."""
+    import io
+
+    import pypdf
+
+    writer = pypdf.PdfWriter()
+    for doc in docs:
+        writer.append(pypdf.PdfReader(io.BytesIO(doc)))
+    buf = io.BytesIO()
+    writer.write(buf)
+    return buf.getvalue()
+
+
+class FakeOcr:
+    """Stands in for Tesseract: returns texts[page index], or raises `error`."""
+
+    def __init__(self, texts: dict[int, str] | None = None, error: Exception | None = None):
+        self.texts = texts or {}
+        self.error = error
+        self.pages: list[int] = []
+
+    def page_text(self, pdf, index: int) -> str:
+        self.pages.append(index)
+        if self.error:
+            raise self.error
+        return self.texts.get(index, "")

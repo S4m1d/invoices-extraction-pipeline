@@ -6,6 +6,7 @@ import sys
 import urllib.request
 
 from . import config, health
+from .ocr import Ocr, OcrError
 from .processor import Processor
 from .storage import Storage
 from .worker import Worker
@@ -25,8 +26,15 @@ def main() -> int:
 
     setup_logging(cfg.log_level)
 
+    ocr = Ocr(cfg.ocr_lang, cfg.ocr_page_timeout)
+    try:
+        ocr.check()
+    except OcrError as e:
+        log.error("cannot start", extra={"error": str(e)})
+        return 1
+
     storage = Storage(cfg.minio_endpoint, cfg.minio_access_key, cfg.minio_secret_key, cfg.minio_use_ssl)
-    worker = Worker(cfg.amqp_url, lambda publisher, sleep: Processor(storage, publisher, sleep=sleep))
+    worker = Worker(cfg.amqp_url, lambda publisher, sleep: Processor(storage, publisher, sleep=sleep, ocr=ocr))
 
     def rabbitmq_check():
         if not worker.connected.is_set():

@@ -10,6 +10,7 @@ from typing import Protocol
 
 from . import context, envelope
 from .convert import ConversionError, PdfInfo, convert
+from .ocr import Ocr
 from .storage import BUCKET, FAILURES_BUCKET, ObjectNotFound, StorageUnavailable
 
 log = logging.getLogger(__name__)
@@ -41,11 +42,13 @@ class Processor:
         publisher: Publisher,
         sleep: Callable[[float], None] = time.sleep,
         now: Callable[[], datetime] = lambda: datetime.now(UTC),
+        ocr: Ocr | None = None,
     ):
         self.storage = storage
         self.publisher = publisher
         self.sleep = sleep
         self.now = now
+        self.ocr = ocr or Ocr()
 
     def handle(self, body: bytes) -> Outcome:
         """Process one message. RabbitMQ errors propagate: the caller must not ack then."""
@@ -64,7 +67,7 @@ class Processor:
     def _process(self, env: envelope.Envelope) -> dict:
         try:
             pdf = self._retry(lambda: self.storage.get(env.object_key))
-            res = convert(pdf, env.document_id)
+            res = convert(pdf, env.document_id, self.ocr)
             self._retry(lambda: self.storage.put_layout(envelope.layout_key(env.document_id), res.markdown))
         except ObjectNotFound as e:
             return self._fail(env, "object_not_found", str(e))
@@ -77,7 +80,13 @@ class Processor:
             return self._fail(env, "internal_error", f"{type(e).__name__}: {e}")
 
         self.publisher.publish(envelope.OUTPUT_QUEUE, envelope.output(env, self.now()), env.correlation_id)
-        return {"result": "ok", "pages": res.info.page_count, "output_bytes": len(res.markdown.encode())}
+        return {
+            "result": "ok",
+            "pages": res.info.page_count,
+            "ocr_pages": len(res.ocr_pages),
+            "output_bytes": len(res.markdown.encode()),
+            "ocr_duration_ms": res.ocr_duration_ms,
+        }
 
     def _fail(
         self, env: envelope.Envelope, code: str, message: str, info: PdfInfo | None = None, pdf_bytes: int | None = None

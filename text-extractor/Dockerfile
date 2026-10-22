@@ -8,6 +8,10 @@ COPY src/text_extractor ./text_extractor
 RUN uv sync --frozen --no-dev
 
 FROM python:3.13-slim
+# OCR for scanned pages (specs/ocr.md).
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends tesseract-ocr tesseract-ocr-eng \
+    && rm -rf /var/lib/apt/lists/*
 RUN useradd --system --uid 10001 app
 WORKDIR /app
 COPY --from=build /app /app

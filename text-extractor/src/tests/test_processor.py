@@ -6,6 +6,7 @@ import pytest
 
 from tests import pdfs
 from text_extractor import context, envelope
+from text_extractor.ocr import OcrError
 from text_extractor.processor import Outcome, Processor
 from text_extractor.storage import ObjectNotFound, StorageUnavailable
 
@@ -139,6 +140,32 @@ def test_pdf_problems_write_diagnostics(env, pdf, code, chars):
     assert diag["created_at"] == "2026-10-14T12:00:00Z"
     if code == "pdf_unreadable":
         assert diag["page_count"] is None and diag["images_per_page"] is None and diag["pdf_metadata"] is None
+        assert diag["page_kinds"] is None and diag["ocr_chars_per_page"] is None
+    else:
+        assert diag["page_kinds"] == ["empty"] and diag["ocr_chars_per_page"] == [None]
+
+
+def test_ocr_failure_writes_diagnostics():
+    storage, publisher = FakeStorage(pdfs.scan(1)), FakePublisher()
+    ocr = pdfs.FakeOcr(error=OcrError("tesseract failed: boom"))
+    p = Processor(storage, publisher, sleep=lambda s: None, now=lambda: NOW, ocr=ocr)
+    assert p.handle(message()) is Outcome.ACK
+    assert storage.calls == ["get", "put_diagnostics"]
+    failure = only_failure(publisher)
+    assert failure["error_code"] == "ocr_failed" and "boom" in failure["error_message"]
+    diag = storage.objects[f"failures/{DOC}.json"]
+    assert diag["page_kinds"] == ["scan"] and diag["ocr_chars_per_page"] == [None]
+
+
+def test_scanned_document_is_processed(caplog):
+    storage, publisher = FakeStorage(pdfs.scan(1)), FakePublisher()
+    p = Processor(storage, publisher, sleep=lambda s: None, now=lambda: NOW, ocr=pdfs.FakeOcr({0: "Total $9.50"}))
+    with caplog.at_level(logging.INFO):
+        assert p.handle(message()) is Outcome.ACK
+    assert "## Page 1 of 1 (OCR)" in storage.objects[f"documents/{DOC}/layout.md"]
+    assert publisher.published[0][0] == "documents.text_extracted"
+    (s,) = [r for r in caplog.records if r.getMessage() == "message processed"]
+    assert s.ocr_pages == 1 and s.ocr_duration_ms >= 0
 
 
 def test_storage_retried_then_succeeds(env):
@@ -209,6 +236,7 @@ def test_summary_log(env, caplog):
     assert len(summary) == 1
     s = summary[0]
     assert s.result == "ok" and s.pages == 1 and s.output_bytes > 0 and s.duration_ms >= 0
+    assert s.ocr_pages == 0 and s.ocr_duration_ms >= 0
 
 
 def test_layout_key_matches_contract():

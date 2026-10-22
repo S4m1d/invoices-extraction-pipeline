@@ -2,7 +2,7 @@
 
 A study project: a pipeline that extracts structured data from invoice documents and stores it in a procurement table.
 
-- **Input:** invoice PDFs (MVP: clean, text-based PDFs; no OCR).
+- **Input:** invoice PDFs: clean, text-based PDFs and light scans (OCR).
 - **Output:** rows in a PostgreSQL procurement table (`invoices`, `invoice_lines`).
 - **Test data:** synthetic invoices and golden sets generated manually with [docsynth](https://github.com/kashodev/docsynth), supplied as dataset directories (format: [`tester/backend/specs/dataset-format.md`](tester/backend/specs/dataset-format.md)).
 - **Methodology:** Spec-Driven Development (SDD). Specs are written first, code follows.
@@ -28,7 +28,7 @@ Pipeline steps: ingestion -> layout analysis + text extraction -> fields extract
 | Path | Purpose | Stack |
 |---|---|---|
 | `ingestor/` | REST API that accepts documents and enqueues them | Go |
-| `text-extractor/` | PDF -> layout-preserving markdown | Python, pdfplumber |
+| `text-extractor/` | PDF -> layout-preserving markdown (OCR for scans) | Python, pdfplumber, Tesseract |
 | `fields-extractor/` | Markdown -> structured JSON via LLM | Python, Pydantic, Anthropic SDK |
 | `integrator/` | JSON -> procurement tables | Go, PostgreSQL |
 | `tester/backend/` | Test orchestration, evaluation against golden sets | Rust, DuckDB, SQLite, PostgreSQL |
