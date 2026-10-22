@@ -6,7 +6,9 @@ use std::{path::PathBuf, time::Duration};
 #[derive(Debug, Clone)]
 pub struct Config {
     pub http_addr: String,
-    pub datasets_dir: PathBuf,
+    pub sources_file: PathBuf,
+    /// If set, source {name} is read from {root}/{name} (specs/data-sources.md, Docker setup).
+    pub sources_mount_root: Option<PathBuf>,
     pub db_path: PathBuf,
     pub ingestor_url: String,
     pub amqp_url: String,
@@ -74,7 +76,8 @@ impl Config {
         }
         Ok(Config {
             http_addr,
-            datasets_dir: opt("TESTER_DATASETS_DIR", "/datasets").into(),
+            sources_file: opt("TESTER_SOURCES_FILE", "/config/sources.yaml").into(),
+            sources_mount_root: get("TESTER_SOURCES_MOUNT_ROOT").filter(|v| !v.is_empty()).map(PathBuf::from),
             db_path: opt("TESTER_DB_PATH", "/data/tester.sqlite").into(),
             ingestor_url: opt("INGESTOR_URL", "http://ingestor:8080"),
             amqp_url,
@@ -117,6 +120,8 @@ mod tests {
         assert_eq!(c.service_health_urls.len(), 4);
         assert_eq!(c.service_health_urls[2].0, "fields-extractor");
         assert_eq!(c.cost_per_document_usd, 0.0026);
+        assert_eq!(c.sources_file, PathBuf::from("/config/sources.yaml"));
+        assert_eq!(c.sources_mount_root, None);
     }
 
     #[test]

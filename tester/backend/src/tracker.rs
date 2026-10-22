@@ -5,7 +5,8 @@ use crate::{
     analytics,
     app::App,
     compare::{self, Invoice, Line},
-    store,
+    sources::RequiredFields,
+    store, validate,
 };
 use anyhow::Result;
 use futures::StreamExt;
@@ -140,7 +141,19 @@ async fn tick(app: &Arc<App>, unmatched: &Unmatched, waiting: bool, elapsed: Dur
         let found = extracted(app, &ids).await?;
         for t in &tracked {
             if let Some((invoice, model, prompt)) = found.get(&t.document_id) {
-                let golden = app.golden(&t.dataset).await?;
+                if t.kind == "documents" {
+                    let required = match app.source(&t.source) {
+                        Ok(s) => s.required_fields.clone().unwrap_or_default(),
+                        Err(e) => {
+                            tracing::warn!(run_id = %t.run_id, error = %e, "validating with the default required fields");
+                            RequiredFields::default()
+                        }
+                    };
+                    let v = validate::validate(invoice, &required);
+                    store::store_validation(&app.db, t, invoice, model.clone(), prompt.clone(), &v).await?;
+                    continue;
+                }
+                let golden = app.golden(&t.source, &t.dataset).await?;
                 match golden.get(&t.invoice_id) {
                     Some(g) => {
                         let c = compare::compare(invoice, &g.invoice, g.unit_price_printed);
@@ -168,7 +181,7 @@ async fn extracted(app: &App, ids: &[String]) -> Result<HashMap<String, (Invoice
     let rows = sqlx::query(
         "SELECT id::text AS id, document_id::text AS document_id, supplier_name, recipient_name, invoice_number,
                 issue_date::text AS issue_date, due_date::text AS due_date, currency::text AS currency,
-                subtotal::text AS subtotal, tax_total::text AS tax_total, grand_total::text AS grand_total,
+                subtotal::text AS subtotal, tax_total::text AS tax_total, grand_total::text AS grand_total, tax_rate::text AS tax_rate,
                 extraction_model, prompt_version
          FROM invoices WHERE document_id::text = ANY($1)",
     )
@@ -204,6 +217,7 @@ async fn extracted(app: &App, ids: &[String]) -> Result<HashMap<String, (Invoice
             subtotal: r.get("subtotal"),
             tax_total: r.get("tax_total"),
             grand_total: r.get("grand_total"),
+            tax_rate: r.get("tax_rate"),
             lines,
         };
         out.insert(r.get("document_id"), (invoice, r.get("extraction_model"), r.get("prompt_version")));

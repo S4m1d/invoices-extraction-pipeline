@@ -4,7 +4,7 @@ A study project: a pipeline that extracts structured data from invoice documents
 
 - **Input:** invoice PDFs: clean, text-based PDFs and light scans (OCR).
 - **Output:** rows in a PostgreSQL procurement table (`invoices`, `invoice_lines`).
-- **Test data:** synthetic invoices and golden sets generated manually with [docsynth](https://github.com/kashodev/docsynth), supplied as dataset directories (format: [`tester/backend/specs/dataset-format.md`](tester/backend/specs/dataset-format.md)).
+- **Test data:** synthetic invoices and golden sets generated manually with [docsynth](https://github.com/kashodev/docsynth), supplied as dataset directories (format: [`tester/backend/specs/dataset-format.md`](tester/backend/specs/dataset-format.md)); real invoices without a golden set can be run too. Both are configured as tester data sources ([`tester/backend/specs/data-sources.md`](tester/backend/specs/data-sources.md)).
 - **Methodology:** Spec-Driven Development (SDD). Specs are written first, code follows.
 
 ## Status
@@ -58,7 +58,7 @@ Per module:
 
 ## Testing approach
 
-Test runs send invoices from a chosen dataset to the pipeline in parallel, then compare the rows that landed in the procurement table with the golden set produced by docsynth. Datasets are supplied through the `tester/datasets` symlink; the client lets the user switch between them. Results and history are kept by the testing backend. See `tester/`.
+Test runs send invoices from a chosen dataset to the pipeline in parallel. For synthetic datasets, the rows that landed in the procurement table are compared with the golden set produced by docsynth; for real documents, which have no golden set, they are checked for required fields and consistent totals. Data sources are configured in a YAML file; the client lets the user choose between synthetic and real-document datasets. Results and history are kept by the testing backend. See `tester/`.
 
 ## Conventions
 

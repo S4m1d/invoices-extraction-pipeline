@@ -10,10 +10,10 @@ JavaScript, React: TypeScript, Vite, React Router, TanStack Query (data fetching
 
 ## Screens
 
-- **Datasets / start run**: datasets found under the datasets root (switchable), document count, cost estimate and today's LLM spend vs. the daily budget; parallelism setting; start button. Active runs are listed, since several can run at once.
-- **Run history**: runs with dataset, start time, duration, status, pass rate, model and prompt version.
-- **Run details**: live progress while active (counts by status; pause, resume and stop buttons; the pipeline's waiting state when a service is paused or down, which also stops the timeouts); when finished, the summary: pass rate, field accuracy table, breakdown by template / currency / language, pipeline errors by stage and code, durations. Document list with filters (status, template, currency).
-- **Document details**: status; pipeline error (stage, code, message) if any; header fields expected vs. actual with outcome highlighting; lines compared by position (missing and extra lines marked) with field differences; timeout reason for timed-out documents; links to open the original PDF and the intermediate artifacts (`layout.md`, `extracted.json`, diagnostics files).
+- **Datasets / start run**: a choice between **Synthetic (golden set)** and **Real documents (no golden set)**, the two source kinds (`tester/backend/specs/data-sources.md`). Under each, its datasets grouped by source (unavailable sources and datasets that cannot be run are shown with their reason, not hidden); document count, cost estimate and today's LLM spend vs. the daily budget; parallelism setting; start button. Active runs are listed, since several can run at once.
+- **Run history**: runs with kind (synthetic / real), source and dataset, start time, duration, status, pass rate, model and prompt version.
+- **Run details**: live progress while active (counts by status; pause, resume and stop buttons; the pipeline's waiting state when a service is paused or down, which also stops the timeouts); when finished, the summary: pass rate, pipeline errors by stage and code, durations, and by kind: synthetic runs show the field accuracy table and the breakdown by template / currency / language; real-document runs show required-field presence, check results and the breakdown by extracted currency. Document list with filters (status, currency; template for synthetic runs).
+- **Document details**: status; pipeline error (stage, code, message) if any; synthetic: header fields expected vs. actual with outcome highlighting, lines compared by position (missing and extra lines marked) with field differences; real documents: extracted header and lines with missing required fields highlighted, and each check with its expected and actual value; timeout reason for timed-out documents; links to open the original PDF and the intermediate artifacts (`layout.md`, `extracted.json`, diagnostics files).
 
 ## Live updates
 

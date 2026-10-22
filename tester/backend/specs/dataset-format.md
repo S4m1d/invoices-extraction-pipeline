@@ -4,12 +4,11 @@ Datasets are produced manually by docsynth and supplied to the testing client by
 
 ## Supplying datasets
 
-- `tester/datasets` is a symlink to a **datasets root** directory outside the repository.
-- Current target: `/home/dev/docsynth/invoice-data-extractor-corpus/blobs`.
-- Every immediate subdirectory of the datasets root is one dataset (currently `run-001`). The dataset name is the directory name.
-- The testing client must list datasets by scanning the datasets root and let the user switch between them. New dataset directories must show up without code changes.
-- The datasets root path is configurable (default: `tester/datasets`). Symlinks are not resolved inside Docker bind mounts, so Docker setups must mount the real target path and point the configuration at the mount.
+- A directory of docsynth runs is configured as a data source of kind `synthetic` ([`data-sources.md`](data-sources.md)); there can be several. `tester/datasets` stays a symlink to the main one (`/home/dev/docsynth/invoice-data-extractor-corpus/blobs`), used by module tests such as `text-extractor`'s corpus tests.
+- Every immediate subdirectory of such a source is one dataset (`run-001`, `run002`, ...). The dataset name is the directory name.
+- The testing client lists datasets by scanning the sources and lets the user switch between them. New dataset directories show up without code changes.
 - Datasets are read-only for the testing client.
+- Plain PDFs without a golden set use a `documents` source instead ([`data-sources.md`](data-sources.md)); this document's format does not apply to them.
 
 ## Dataset directory layout
 
@@ -44,8 +43,8 @@ A *unit* is a shard of the dataset; a dataset has `total_units` units (run-001 h
 | `total_documents` | `200` | |
 | `total_units` | `1` | |
 | `table_rows` | `{"invoices": 200, "line_items": 14392}` | Row counts per golden table |
-| `document_key_pattern` | `{run_id}/documents/unit-{unit:06d}/{record_id}{ext}` | Keys are relative to the datasets root |
-| `shard_key_pattern` | `{run_id}/golden/{table}/unit-{unit:06d}.jsonl.gz` | Keys are relative to the datasets root |
+| `document_key_pattern` | `{run_id}/documents/unit-{unit:06d}/{record_id}{ext}` | Keys are relative to the source directory |
+| `shard_key_pattern` | `{run_id}/golden/{table}/unit-{unit:06d}.jsonl.gz` | Keys are relative to the source directory |
 | `parts[]` | `{unit_index, start_index, count, documents, bytes, sha256, key}` | One per unit; `key` points to the unit manifest |
 
 ## `manifest/unit-{unit:06d}.json`

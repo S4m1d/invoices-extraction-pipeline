@@ -3,11 +3,32 @@
 export type RunStatus = "running" | "paused" | "stopped" | "completed";
 export type DocStatus = "pending" | "uploaded" | "passed" | "failed" | "error" | "timeout";
 
+/** Data source kind (tester/backend/specs/data-sources.md). */
+export type Kind = "synthetic" | "documents";
+
+export const KIND_LABEL: Record<Kind, string> = {
+  synthetic: "Synthetic (golden set)",
+  documents: "Real documents (no golden set)",
+};
+
+export interface Source {
+  name: string;
+  kind: Kind;
+  connection_type: string;
+  available: boolean;
+  reason: string | null;
+  required_fields: { invoice: string[]; line: string[] } | null;
+}
+
 export interface Dataset {
+  source: string;
+  kind: Kind;
   name: string;
   total_documents: number;
-  total_units: number;
+  total_units: number | null;
   created_at: string | null;
+  /** Set when the dataset cannot be run. */
+  error: string | null;
   estimated_cost_usd: number;
 }
 
@@ -20,7 +41,9 @@ export interface Spend {
 
 export interface Run {
   id: string;
+  source: string;
   dataset: string;
+  kind: Kind;
   parallelism: number;
   status: RunStatus;
   documents_total: number;
@@ -48,19 +71,33 @@ export interface Breakdown {
   field_total: number;
 }
 
-export interface Summary {
+interface SummaryCommon {
   documents: { total: number; passed: number; failed: number; error: number; timeout: number; unfinished: number };
   overlapped: boolean;
-  fields: FieldStat[];
-  lines: { compared: number; missing: number; extra: number };
-  by_template: Breakdown[];
-  by_currency: Breakdown[];
-  by_language: Breakdown[];
   errors: { stage: string; code: string; documents: number }[];
   models: { model: string; prompt: string | null; documents: number }[];
   durations: { median_s: number | null; p95_s: number | null; max_s: number | null } | null;
   wall_clock_s: number | null;
 }
+
+export interface SyntheticSummary extends SummaryCommon {
+  /** Absent in summaries stored before data sources existed. */
+  kind?: "synthetic";
+  fields: FieldStat[];
+  lines: { compared: number; missing: number; extra: number };
+  by_template: Breakdown[];
+  by_currency: Breakdown[];
+  by_language: Breakdown[];
+}
+
+export interface DocumentsSummary extends SummaryCommon {
+  kind: "documents";
+  required_fields: { field: string; line_field: boolean; present: number; missing: number }[];
+  checks: { check: CheckName; pass: number; fail: number; not_applicable: number }[];
+  by_currency: { value: string | null; documents: number; passed: number }[];
+}
+
+export type Summary = SyntheticSummary | DocumentsSummary;
 
 export interface RunDetail {
   run: Run;
@@ -107,7 +144,8 @@ export interface LineRow {
   outcome: "compared" | "missing" | "extra";
 }
 
-export interface DocumentDetail {
+export interface SyntheticDocumentDetail {
+  kind: "synthetic";
   document: DocumentRow;
   template_id: string | null;
   currency: string | null;
@@ -116,6 +154,57 @@ export interface DocumentDetail {
   lines: LineRow[];
   artifacts: string[];
 }
+
+export type CheckName = "lines_sum" | "totals" | "line_amount";
+
+export const CHECK_LABEL: Record<CheckName, string> = {
+  lines_sum: "Lines sum to subtotal",
+  totals: "Subtotal + tax = total",
+  line_amount: "Quantity × unit price = amount",
+};
+
+export interface RequiredFieldRow {
+  position: number | null;
+  field: string;
+  outcome: "present" | "missing";
+  actual: string | null;
+}
+
+export interface CheckRow {
+  check: CheckName;
+  position: number | null;
+  outcome: "pass" | "fail" | "not_applicable";
+  expected: string | null;
+  actual: string | null;
+}
+
+export type ExtractedValue = string | null;
+
+export interface Extracted {
+  supplier_name: ExtractedValue;
+  recipient_name: ExtractedValue;
+  invoice_number: ExtractedValue;
+  issue_date: ExtractedValue;
+  due_date: ExtractedValue;
+  currency: ExtractedValue;
+  subtotal: ExtractedValue;
+  tax_total: ExtractedValue;
+  grand_total: ExtractedValue;
+  tax_rate?: ExtractedValue;
+  lines: { line_no: number; description: ExtractedValue; quantity: ExtractedValue; unit_price: ExtractedValue; amount: ExtractedValue }[];
+}
+
+export interface DocumentsDocumentDetail {
+  kind: "documents";
+  document: DocumentRow;
+  currency: string | null;
+  fields: RequiredFieldRow[];
+  checks: CheckRow[];
+  extracted: Extracted | null;
+  artifacts: string[];
+}
+
+export type DocumentDetail = SyntheticDocumentDetail | DocumentsDocumentDetail;
 
 export interface PipelineState {
   services: { service: string; healthy: boolean; failing: string[]; errors: Record<string, string> }[];
@@ -146,13 +235,14 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
+  sources: () => request<Source[]>("/api/sources"),
   datasets: () => request<Dataset[]>("/api/datasets"),
   spend: () => request<Spend>("/api/spend"),
   pipeline: () => request<PipelineState>("/api/pipeline"),
   runs: () => request<RunListItem[]>("/api/runs"),
   run: (id: string) => request<RunDetail>(`/api/runs/${id}`),
-  startRun: (dataset: string, parallelism: number) =>
-    request<Run>("/api/runs", { method: "POST", body: JSON.stringify({ dataset, parallelism }) }),
+  startRun: (source: string, dataset: string, parallelism: number) =>
+    request<Run>("/api/runs", { method: "POST", body: JSON.stringify({ source, dataset, parallelism }) }),
   control: (id: string, action: "pause" | "resume" | "stop") =>
     request<{ id: string; status: RunStatus }>(`/api/runs/${id}/${action}`, { method: "POST" }),
   documents: (id: string, filters: Record<string, string>) => {

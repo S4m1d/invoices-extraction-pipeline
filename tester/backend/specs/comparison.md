@@ -2,7 +2,7 @@
 
 Status: approved.
 
-How a document's extracted invoice (PostgreSQL) is compared with its golden record (`dataset-format.md`). Compared fields: the extraction schema's mapping (`fields-extractor/specs/extraction-schema.md`, ADR 0008); `tax_rate` is not compared.
+How a document's extracted invoice (PostgreSQL) is compared with its golden record (`dataset-format.md`). Applies to runs on `synthetic` sources; documents without a golden set are judged by [`validation.md`](validation.md) ([`data-sources.md`](data-sources.md)). Compared fields: the extraction schema's mapping (`fields-extractor/specs/extraction-schema.md`, ADR 0008); `tax_rate` is not compared.
 
 ## Field outcomes
 

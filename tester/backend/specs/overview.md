@@ -18,16 +18,16 @@ Crates: `axum` + `tokio` (HTTP), `sqlx` (SQLite and PostgreSQL), `duckdb` (bundl
 
 ## Responsibilities
 
-- Discover datasets: every subdirectory of the datasets root (`tester/datasets`, a symlink). See [`dataset-format.md`](dataset-format.md).
-- Let the user switch between datasets (e.g. `run-001`) and start a run on the selected one.
+- Discover datasets in the configured data sources: `synthetic` sources (docsynth runs with golden sets) and `documents` sources (plain PDFs, for example real invoices). See [`data-sources.md`](data-sources.md) and [`dataset-format.md`](dataset-format.md).
+- Let the user choose between synthetic and real-document datasets and start a run on the selected one.
 - Start a test run: send the dataset's invoices to `ingestor` with a configurable parallel load.
-- Compare resulting procurement rows with the golden set and record the result per document. Rules: [`comparison.md`](comparison.md).
+- Judge each resulting procurement row and record the result per document: against the golden set for `synthetic` datasets ([`comparison.md`](comparison.md)), by required fields and arithmetic checks for `documents` datasets ([`validation.md`](validation.md)).
 - Provide run history and per-document failure details (including access to the source file and the pipeline's intermediate artifacts).
 - Expose all of the above to the frontend over HTTP.
 
 ## Interfaces
 
-- Dataset input: see [`dataset-format.md`](dataset-format.md).
+- Dataset input: see [`data-sources.md`](data-sources.md) and [`dataset-format.md`](dataset-format.md).
 - HTTP API for the frontend: see [`api.md`](api.md).
 - Result storage: see [`data-model.md`](data-model.md).
 - Pipeline: `ingestor` HTTP API (uploads), `documents.failed` queue (failures, contract), PostgreSQL (results, read-only role `tester`), MinIO (artifacts, read-only).
@@ -37,7 +37,7 @@ Crates: `axum` + `tokio` (HTTP), `sqlx` (SQLite and PostgreSQL), `duckdb` (bundl
 ### Starting
 
 - Several runs can be active at once; each tracks its own documents (by `document_id`). Runs that overlap in time slow each other down, so the summary marks a run whose time overlapped with another run's (durations not comparable).
-- A run uploads every document of the dataset (all units) to `POST /documents` of the ingestor, at most `parallelism` uploads in flight (default 4, 1..32). Each upload gets a new `correlation_id` (UUIDv4, contract: one per request). The run records `invoice_id` → `document_id` → `correlation_id`.
+- A run uploads every document of the dataset (all units of a `synthetic` dataset; every PDF of a `documents` dataset) to `POST /documents` of the ingestor, at most `parallelism` uploads in flight (default 4, 1..32). Each upload gets a new `correlation_id` (UUIDv4, contract: one per request). The run records `invoice_id` → `document_id` → `correlation_id`.
 - Upload errors: `503` (`server_busy`, `service_unavailable`) and connection errors are retried with backoff (1, 2, 4, 8 s; 5 attempts); then the document is `error` with `upload_failed`. Other `4xx` are `error` at once.
 
 ### Completion
@@ -56,7 +56,7 @@ The services' `/healthz` responses carry an `errors` object with the reason per 
 
 ### Comparing
 
-When the row is there, the backend reads the invoice and its lines (role `tester`), compares them with the golden set ([`comparison.md`](comparison.md)) and stores the outcome and a copy of the extracted values in SQLite, so results stay inspectable after the pipeline database is reset or a document is reprocessed.
+When the row is there, the backend reads the invoice and its lines (role `tester`), compares them with the golden set ([`comparison.md`](comparison.md)) or, for `documents` runs, validates them ([`validation.md`](validation.md)), and stores the outcome and a copy of the extracted values in SQLite, so results stay inspectable after the pipeline database is reset or a document is reprocessed.
 
 ### Stop, pause and resume
 
@@ -72,7 +72,7 @@ Every document passes through the real LLM unless the stack runs in fake mode (`
 
 ## Analytics
 
-The run summary contains, per run:
+The run summary of a `synthetic` run contains (for `documents` runs see [`validation.md`](validation.md), Summary):
 
 - Document counts by status (`passed`, `failed`, `error`, `timeout`), and whether the run overlapped with another run.
 - Field accuracy per compared field (match / mismatch / missing / unexpected counts), and line accuracy (matched, missing, extra).
@@ -85,18 +85,19 @@ Computed with DuckDB over the run's results (SQLite, attached) joined with the g
 
 ## Golden set access
 
-DuckDB reads the gzip JSON Lines shards directly (`read_json_auto` on the `.jsonl.gz` files of all units) when a run starts and when a summary is computed; nothing is imported. run-001 (200 invoices, 14,392 lines) reads in well under a second, and datasets change only when the author adds new ones.
+For `synthetic` datasets, DuckDB reads the gzip JSON Lines shards directly (`read_json_auto` on the `.jsonl.gz` files of all units) when a run starts and when a summary is computed; nothing is imported. run-001 (200 invoices, 14,392 lines) reads in well under a second, and datasets change only when the author adds new ones.
 
 ## Deployment and configuration
 
 - A container in the `infra` Compose project (`tester`), built from `tester/` (backend and frontend in one image: the backend serves the frontend's built files, see `tester/frontend/specs/overview.md`). Published on `127.0.0.1:8090`.
-- Datasets: Docker does not resolve the `tester/datasets` symlink inside bind mounts, so Compose mounts the symlink's target (`DATASETS_DIR` in `infra/.env`) read-only at `/datasets`.
+- Data sources: mounted read-only at `/sources/{name}` from a Compose override generated from `infra/tester-sources.yaml` ([`data-sources.md`](data-sources.md), Docker setup).
 - SQLite file in the named volume `tester-data`.
 
 | Variable | Default | Description |
 |---|---|---|
 | `TESTER_HTTP_ADDR` | `:8090` | HTTP API and frontend |
-| `TESTER_DATASETS_DIR` | `/datasets` | Datasets root |
+| `TESTER_SOURCES_FILE` | `/config/sources.yaml` | Data sources configuration ([`data-sources.md`](data-sources.md)) |
+| `TESTER_SOURCES_MOUNT_ROOT` | empty | If set, source `{name}` is read from `{root}/{name}` instead of its configured path (Compose: `/sources`) |
 | `TESTER_DB_PATH` | `/data/tester.sqlite` | SQLite file |
 | `INGESTOR_URL` | `http://ingestor:8080` | |
 | `AMQP_URL` | | RabbitMQ (consumes `documents.failed`) |

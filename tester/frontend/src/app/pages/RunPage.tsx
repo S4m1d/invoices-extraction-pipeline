@@ -2,7 +2,7 @@
 import { useState } from "react";
 import { Link, useParams } from "react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { api, isActive, pct, seconds, type Breakdown, type Summary } from "../api";
+import { api, CHECK_LABEL, isActive, KIND_LABEL, pct, seconds, type Breakdown, type DocumentsSummary, type Summary, type SyntheticSummary } from "../api";
 import { PipelineBanner, StatusBadge } from "./common";
 import s from "../app.module.css";
 
@@ -34,6 +34,7 @@ export function RunPage() {
   if (!run.data) return <p>Loading…</p>;
   const { run: r, counts, summary, waiting } = run.data;
   const finished = counts.passed + counts.failed + counts.error + counts.timeout;
+  const synthetic = r.kind !== "documents";
 
   return (
     <>
@@ -43,10 +44,10 @@ export function RunPage() {
       <PipelineBanner waiting={waiting} />
       <section className={s.card}>
         <h2>
-          Run on {r.dataset} <StatusBadge status={r.status} />
+          Run on {r.source}/{r.dataset} <StatusBadge status={r.status} />
         </h2>
         <p className={s.muted}>
-          Started {new Date(r.started_at).toLocaleString()}
+          {KIND_LABEL[r.kind]} · Started {new Date(r.started_at).toLocaleString()}
           {r.finished_at && <> · finished {new Date(r.finished_at).toLocaleString()}</>} · {r.parallelism} parallel uploads
           {r.overlapped && <> · overlapped with another run (durations not comparable)</>}
         </p>
@@ -85,10 +86,12 @@ export function RunPage() {
               ))}
             </select>
           </label>
-          <label>
-            Template
-            <input value={filters.template_id ?? ""} onChange={(e) => setFilters({ ...filters, template_id: e.target.value })} />
-          </label>
+          {synthetic && (
+            <label>
+              Template
+              <input value={filters.template_id ?? ""} onChange={(e) => setFilters({ ...filters, template_id: e.target.value })} />
+            </label>
+          )}
           <label>
             Currency
             <input value={filters.currency ?? ""} onChange={(e) => setFilters({ ...filters, currency: e.target.value.toUpperCase() })} />
@@ -99,7 +102,7 @@ export function RunPage() {
             <tr>
               <th>Invoice</th>
               <th>Status</th>
-              <th>Template</th>
+              {synthetic && <th>Template</th>}
               <th>Currency</th>
               <th>Error / reason</th>
             </tr>
@@ -113,7 +116,7 @@ export function RunPage() {
                 <td>
                   <StatusBadge status={d.status} />
                 </td>
-                <td>{d.template_id}</td>
+                {synthetic && <td>{d.template_id}</td>}
                 <td>{d.currency}</td>
                 <td className={s.muted}>
                   {d.error_code ? `${d.error_stage}: ${d.error_code}` : (d.timeout_reason ?? "")}
@@ -141,6 +144,102 @@ function SummaryView({ summary }: { summary: Summary }) {
         {seconds(summary.durations?.p95_s)}, max {seconds(summary.durations?.max_s)}
         {summary.models.length > 0 && <> · {summary.models.map((m) => `${m.model} prompt ${m.prompt ?? "?"} (${m.documents})`).join(", ")}</>}
       </p>
+      {summary.kind === "documents" ? <DocumentsSummaryView summary={summary} /> : <SyntheticSummaryView summary={summary} />}
+      {summary.errors.length > 0 && (
+        <>
+          <h3>Pipeline errors</h3>
+          <table className={s.table}>
+            <tbody>
+              {summary.errors.map((e) => (
+                <tr key={`${e.stage}/${e.code}`}>
+                  <td>{e.stage}</td>
+                  <td>{e.code}</td>
+                  <td>{e.documents}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </>
+      )}
+    </section>
+  );
+}
+
+/** No golden set: required-field presence, arithmetic checks, extracted currency (backend validation.md, Summary). */
+function DocumentsSummaryView({ summary }: { summary: DocumentsSummary }) {
+  return (
+    <>
+      <h3>Required fields</h3>
+      <table className={s.table}>
+        <thead>
+          <tr>
+            <th>Field</th>
+            <th>Present</th>
+            <th>Missing</th>
+            <th>Present %</th>
+          </tr>
+        </thead>
+        <tbody>
+          {summary.required_fields.map((f) => (
+            <tr key={`${f.line_field}/${f.field}`}>
+              <td>
+                {f.line_field ? "line " : ""}
+                {f.field}
+              </td>
+              <td>{f.present}</td>
+              <td>{f.missing}</td>
+              <td>{pct(f.present, f.present + f.missing)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <h3>Checks</h3>
+      <table className={s.table}>
+        <thead>
+          <tr>
+            <th>Check</th>
+            <th>Pass</th>
+            <th>Fail</th>
+            <th>Not applicable</th>
+          </tr>
+        </thead>
+        <tbody>
+          {summary.checks.map((c) => (
+            <tr key={c.check}>
+              <td>{CHECK_LABEL[c.check] ?? c.check}</td>
+              <td>{c.pass}</td>
+              <td>{c.fail}</td>
+              <td>{c.not_applicable}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <h3>By currency (extracted)</h3>
+      <table className={s.table}>
+        <thead>
+          <tr>
+            <th />
+            <th>Docs</th>
+            <th>Passed</th>
+          </tr>
+        </thead>
+        <tbody>
+          {summary.by_currency.map((b) => (
+            <tr key={b.value ?? ""}>
+              <td>{b.value ?? "–"}</td>
+              <td>{b.documents}</td>
+              <td>{pct(b.passed, b.documents)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </>
+  );
+}
+
+function SyntheticSummaryView({ summary }: { summary: SyntheticSummary }) {
+  return (
+    <>
       <h3>Field accuracy</h3>
       <table className={s.table}>
         <thead>
@@ -182,23 +281,7 @@ function SummaryView({ summary }: { summary: Summary }) {
         <BreakdownTable title="By currency" rows={summary.by_currency} />
         <BreakdownTable title="By language" rows={summary.by_language} />
       </div>
-      {summary.errors.length > 0 && (
-        <>
-          <h3>Pipeline errors</h3>
-          <table className={s.table}>
-            <tbody>
-              {summary.errors.map((e) => (
-                <tr key={`${e.stage}/${e.code}`}>
-                  <td>{e.stage}</td>
-                  <td>{e.code}</td>
-                  <td>{e.documents}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </>
-      )}
-    </section>
+    </>
   );
 }
 

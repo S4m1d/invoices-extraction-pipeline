@@ -50,6 +50,7 @@ pub fn load(root: &Path, dataset: &str) -> Result<HashMap<String, Golden>> {
                 subtotal: s(7)?,
                 tax_total: s(8)?,
                 grand_total: s(9)?,
+                tax_rate: None,
                 lines: vec![],
             },
             s(10)?.unwrap_or_default(),

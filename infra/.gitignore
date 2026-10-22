@@ -1,1 +1,4 @@
 __pycache__/
+# Machine-specific tester data sources and the Compose override generated from them
+tester-sources.yaml
+docker-compose.sources.yml

@@ -26,7 +26,7 @@ Accepted ADRs are not rewritten; a changed decision gets a new ADR that supersed
 | [0003](0003-merge-layout-and-text-extraction.md) | Layout analysis and text extraction are one module | accepted |
 | [0004](0004-llm-provider-abstraction.md) | LLM provider abstraction, Anthropic only for MVP | accepted |
 | [0005](0005-react-web-frontend-for-testing-client.md) | Testing client frontend is a React web app | accepted |
-| [0006](0006-datasets-via-symlink.md) | Datasets supplied through a symlinked directory | accepted |
+| [0006](0006-datasets-via-symlink.md) | Datasets supplied through a symlinked directory | superseded by 0015 |
 | [0007](0007-mvp-clean-text-pdfs.md) | MVP scope: clean text PDFs, no OCR | superseded by 0014 |
 | [0008](0008-extraction-schema.md) | Extraction schema: core header + basic lines, invoice-level tax | accepted |
 | [0009](0009-pipeline-contracts.md) | Pipeline contracts: queues, envelope, failures | accepted |
@@ -35,3 +35,4 @@ Accepted ADRs are not rewritten; a changed decision gets a new ADR that supersed
 | [0012](0012-integrator-duplicates-and-outages.md) | Integrator: duplicates fail, database outages pause | accepted |
 | [0013](0013-minio-image-from-chainguard.md) | MinIO image from Chainguard, pinned by digest | accepted |
 | [0014](0014-scan-processing-with-tesseract.md) | Scan processing: per-page OCR with Tesseract in text-extractor | accepted |
+| [0015](0015-tester-data-sources.md) | Tester data sources: YAML-configured, synthetic and document-only kinds | accepted |
