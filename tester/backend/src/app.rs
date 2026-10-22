@@ -1,6 +1,6 @@
 //! Shared application state.
 
-use crate::{config::Config, golden, objects::Objects, pipeline};
+use crate::{config::Config, golden, objects::Objects, pipeline, sources::Source};
 use anyhow::Result;
 use sqlx::{PgPool, SqlitePool};
 use std::{collections::HashMap, sync::Arc};
@@ -16,6 +16,7 @@ pub enum Control {
 
 pub struct App {
     pub cfg: Config,
+    pub sources: Vec<Source>,
     pub db: SqlitePool,
     pub pg: PgPool,
     pub objects: Objects,
@@ -29,9 +30,10 @@ pub struct App {
 }
 
 impl App {
-    pub fn new(cfg: Config, db: SqlitePool, pg: PgPool, objects: Objects, http: reqwest::Client) -> App {
+    pub fn new(cfg: Config, sources: Vec<Source>, db: SqlitePool, pg: PgPool, objects: Objects, http: reqwest::Client) -> App {
         App {
             cfg,
+            sources,
             db,
             pg,
             objects,
@@ -44,16 +46,21 @@ impl App {
         }
     }
 
-    /// Golden records of a dataset, read once per process (datasets change only when the author adds new ones).
-    pub async fn golden(&self, dataset: &str) -> Result<Arc<HashMap<String, golden::Golden>>> {
+    pub fn source(&self, name: &str) -> Result<&Source> {
+        self.sources.iter().find(|s| s.name == name).ok_or_else(|| anyhow::anyhow!("data source {name:?} is not configured"))
+    }
+
+    /// Golden records of a synthetic dataset, read once per process (datasets change only when the author adds new ones).
+    pub async fn golden(&self, source: &str, dataset: &str) -> Result<Arc<HashMap<String, golden::Golden>>> {
+        let key = format!("{source}/{dataset}");
         let mut cache = self.golden.lock().await;
-        if let Some(g) = cache.get(dataset) {
+        if let Some(g) = cache.get(&key) {
             return Ok(g.clone());
         }
-        let root = self.cfg.datasets_dir.clone();
+        let root = self.source(source)?.path.clone();
         let name = dataset.to_string();
         let g = Arc::new(tokio::task::spawn_blocking(move || golden::load(&root, &name)).await??);
-        cache.insert(dataset.to_string(), g.clone());
+        cache.insert(key, g.clone());
         Ok(g)
     }
 }

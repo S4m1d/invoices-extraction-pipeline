@@ -19,6 +19,9 @@ pub struct Invoice {
     pub subtotal: Value,
     pub tax_total: Value,
     pub grand_total: Value,
+    /// Not compared with the golden set; may be a required field of a documents source.
+    #[serde(default)]
+    pub tax_rate: Value,
     pub lines: Vec<Line>,
 }
 
@@ -231,6 +234,7 @@ mod tests {
             subtotal: v("774.05"),
             tax_total: v("154.81"),
             grand_total: v("928.86"),
+            tax_rate: None,
             lines: vec![
                 line(1, "Premium support add-on", Some("1"), Some("268.21"), "268.21"),
                 line(2, "Additional user seats", Some("6"), Some("30.27"), "181.62"),

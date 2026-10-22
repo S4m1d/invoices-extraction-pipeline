@@ -1,6 +1,9 @@
 //! Run results in SQLite (tester/backend/specs/data-model.md).
 
-use crate::compare::{Comparison, Invoice};
+use crate::{
+    compare::{Comparison, Invoice},
+    validate::Validation,
+};
 use anyhow::Result;
 use chrono::Utc;
 use serde::Serialize;
@@ -34,13 +37,19 @@ fn migrator() -> Migrator {
     let m = |version, description: &'static str, sql: &'static str| {
         Migration::new(version, description.into(), MigrationType::Simple, sql.into_sql_str(), false)
     };
-    Migrator::with_migrations(vec![m(1, "runs", include_str!("migrations/0001_runs.sql"))])
+    Migrator::with_migrations(vec![
+        m(1, "runs", include_str!("migrations/0001_runs.sql")),
+        m(2, "data sources", include_str!("migrations/0002_data_sources.sql")),
+    ])
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Run {
     pub id: String,
+    pub source: String,
     pub dataset: String,
+    /// `synthetic` or `documents` (sources::Kind).
+    pub kind: String,
     pub parallelism: i64,
     pub status: String,
     pub documents_total: i64,
@@ -52,7 +61,9 @@ pub struct Run {
 fn run_from(r: &sqlx::sqlite::SqliteRow) -> Run {
     Run {
         id: r.get("id"),
+        source: r.get("source"),
         dataset: r.get("dataset"),
+        kind: r.get("kind"),
         parallelism: r.get("parallelism"),
         status: r.get("status"),
         documents_total: r.get("documents_total"),
@@ -62,9 +73,17 @@ fn run_from(r: &sqlx::sqlite::SqliteRow) -> Run {
     }
 }
 
-const RUN_COLUMNS: &str = "SELECT id, dataset, parallelism, status, documents_total, started_at, finished_at, overlapped FROM runs";
+const RUN_COLUMNS: &str = "SELECT id, source, dataset, kind, parallelism, status, documents_total, started_at, finished_at, overlapped FROM runs";
 
-pub async fn create_run(db: &SqlitePool, id: &str, dataset: &str, parallelism: i64, invoice_ids: &[String]) -> Result<()> {
+pub struct NewRun<'a> {
+    pub id: &'a str,
+    pub source: &'a str,
+    pub dataset: &'a str,
+    pub kind: &'a str,
+    pub parallelism: i64,
+}
+
+pub async fn create_run(db: &SqlitePool, run: NewRun<'_>, invoice_ids: &[String]) -> Result<()> {
     let mut tx = db.begin().await?;
     // Another run active at the same time: both runs' durations are not comparable (overview, Starting).
     let active: i64 = sqlx::query_scalar("SELECT count(*) FROM runs WHERE status IN ('running', 'paused')")
@@ -72,11 +91,13 @@ pub async fn create_run(db: &SqlitePool, id: &str, dataset: &str, parallelism: i
         .await?;
     sqlx::query("UPDATE runs SET overlapped = 1 WHERE status IN ('running', 'paused')").execute(&mut *tx).await?;
     sqlx::query(
-        "INSERT INTO runs (id, dataset, parallelism, status, documents_total, started_at, overlapped) VALUES (?, ?, ?, 'running', ?, ?, ?)",
+        "INSERT INTO runs (id, source, dataset, kind, parallelism, status, documents_total, started_at, overlapped) VALUES (?, ?, ?, ?, ?, 'running', ?, ?, ?)",
     )
-    .bind(id)
-    .bind(dataset)
-    .bind(parallelism)
+    .bind(run.id)
+    .bind(run.source)
+    .bind(run.dataset)
+    .bind(run.kind)
+    .bind(run.parallelism)
     .bind(invoice_ids.len() as i64)
     .bind(now())
     .bind((active > 0) as i64)
@@ -84,7 +105,7 @@ pub async fn create_run(db: &SqlitePool, id: &str, dataset: &str, parallelism: i
     .await?;
     for invoice_id in invoice_ids {
         sqlx::query("INSERT INTO run_documents (run_id, invoice_id, status) VALUES (?, ?, 'pending')")
-            .bind(id)
+            .bind(run.id)
             .bind(invoice_id)
             .execute(&mut *tx)
             .await?;
@@ -182,7 +203,9 @@ pub async fn mark_error(db: &SqlitePool, run_id: &str, invoice_id: &str, stage: 
 #[derive(Debug, Clone)]
 pub struct Tracked {
     pub run_id: String,
+    pub source: String,
     pub dataset: String,
+    pub kind: String,
     pub invoice_id: String,
     pub document_id: String,
     pub active_wait_seconds: f64,
@@ -191,7 +214,7 @@ pub struct Tracked {
 /// Uploaded documents still waiting for their result, across all runs.
 pub async fn tracked(db: &SqlitePool) -> Result<Vec<Tracked>> {
     let rows = sqlx::query(
-        "SELECT d.run_id, r.dataset, d.invoice_id, d.document_id, d.active_wait_seconds FROM run_documents d JOIN runs r ON r.id = d.run_id WHERE d.status = 'uploaded'",
+        "SELECT d.run_id, r.source, r.dataset, r.kind, d.invoice_id, d.document_id, d.active_wait_seconds FROM run_documents d JOIN runs r ON r.id = d.run_id WHERE d.status = 'uploaded'",
     )
     .fetch_all(db)
     .await?;
@@ -199,7 +222,9 @@ pub async fn tracked(db: &SqlitePool) -> Result<Vec<Tracked>> {
         .iter()
         .map(|r| Tracked {
             run_id: r.get("run_id"),
+            source: r.get("source"),
             dataset: r.get("dataset"),
+            kind: r.get("kind"),
             invoice_id: r.get("invoice_id"),
             document_id: r.get("document_id"),
             active_wait_seconds: r.get("active_wait_seconds"),
@@ -267,17 +292,67 @@ pub async fn store_comparison(
             .execute(&mut *tx)
             .await?;
     }
+    finish_document(&mut tx, t, extracted, model, prompt, c.passed).await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+/// Stores a validation (documents runs) and the extracted copy; the document becomes passed or failed.
+pub async fn store_validation(
+    db: &SqlitePool,
+    t: &Tracked,
+    extracted: &Invoice,
+    model: Option<String>,
+    prompt: Option<String>,
+    v: &Validation,
+) -> Result<()> {
+    let mut tx = db.begin().await?;
+    for f in &v.fields {
+        sqlx::query("INSERT INTO run_field_results (run_id, invoice_id, position, field, outcome, expected, actual) VALUES (?, ?, ?, ?, ?, NULL, ?)")
+            .bind(&t.run_id)
+            .bind(&t.invoice_id)
+            .bind(f.position)
+            .bind(&f.field)
+            .bind(f.outcome)
+            .bind(&f.actual)
+            .execute(&mut *tx)
+            .await?;
+    }
+    for c in &v.checks {
+        sqlx::query("INSERT INTO run_check_results (run_id, invoice_id, \"check\", position, outcome, expected, actual) VALUES (?, ?, ?, ?, ?, ?, ?)")
+            .bind(&t.run_id)
+            .bind(&t.invoice_id)
+            .bind(c.check)
+            .bind(c.position)
+            .bind(c.outcome)
+            .bind(&c.expected)
+            .bind(&c.actual)
+            .execute(&mut *tx)
+            .await?;
+    }
+    finish_document(&mut tx, t, extracted, model, prompt, v.passed).await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+async fn finish_document(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    t: &Tracked,
+    extracted: &Invoice,
+    model: Option<String>,
+    prompt: Option<String>,
+    passed: bool,
+) -> Result<()> {
     sqlx::query("UPDATE run_documents SET status = ?, finished_at = ?, extracted_json = ?, extraction_model = ?, prompt_version = ? WHERE run_id = ? AND invoice_id = ? AND status = 'uploaded'")
-        .bind(if c.passed { "passed" } else { "failed" })
+        .bind(if passed { "passed" } else { "failed" })
         .bind(now())
         .bind(serde_json::to_string(extracted)?)
         .bind(model)
         .bind(prompt)
         .bind(&t.run_id)
         .bind(&t.invoice_id)
-        .execute(&mut *tx)
+        .execute(&mut **tx)
         .await?;
-    tx.commit().await?;
     Ok(())
 }
 
@@ -331,6 +406,15 @@ pub async fn documents(db: &SqlitePool, run_id: &str) -> Result<Vec<DocumentRow>
         .collect())
 }
 
+/// Extracted currency per invoice_id of a run (documents runs have no golden currency).
+pub async fn extracted_currencies(db: &SqlitePool, run_id: &str) -> Result<std::collections::HashMap<String, String>> {
+    let rows = sqlx::query("SELECT invoice_id, json_extract(extracted_json, '$.currency') AS currency FROM run_documents WHERE run_id = ?")
+        .bind(run_id)
+        .fetch_all(db)
+        .await?;
+    Ok(rows.iter().filter_map(|r| Some((r.get("invoice_id"), r.get::<Option<String>, _>("currency")?))).collect())
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct FieldRow {
     pub position: Option<i64>,
@@ -348,7 +432,23 @@ pub struct LineRow {
     pub outcome: String,
 }
 
-pub async fn document_results(db: &SqlitePool, run_id: &str, invoice_id: &str) -> Result<(Vec<FieldRow>, Vec<LineRow>, Option<String>)> {
+#[derive(Debug, Clone, Serialize)]
+pub struct CheckRow {
+    pub check: String,
+    pub position: Option<i64>,
+    pub outcome: String,
+    pub expected: Option<String>,
+    pub actual: Option<String>,
+}
+
+pub struct DocumentResults {
+    pub fields: Vec<FieldRow>,
+    pub lines: Vec<LineRow>,
+    pub checks: Vec<CheckRow>,
+    pub extracted: Option<String>,
+}
+
+pub async fn document_results(db: &SqlitePool, run_id: &str, invoice_id: &str) -> Result<DocumentResults> {
     let fields = sqlx::query("SELECT position, field, outcome, expected, actual FROM run_field_results WHERE run_id = ? AND invoice_id = ? ORDER BY position IS NOT NULL, position, rowid")
         .bind(run_id)
         .bind(invoice_id)
@@ -371,5 +471,13 @@ pub async fn document_results(db: &SqlitePool, run_id: &str, invoice_id: &str) -
         .fetch_optional(db)
         .await?
         .flatten();
-    Ok((fields, lines, extracted))
+    let checks = sqlx::query("SELECT \"check\", position, outcome, expected, actual FROM run_check_results WHERE run_id = ? AND invoice_id = ? ORDER BY position IS NOT NULL, position, rowid")
+        .bind(run_id)
+        .bind(invoice_id)
+        .fetch_all(db)
+        .await?
+        .iter()
+        .map(|r| CheckRow { check: r.get("check"), position: r.get("position"), outcome: r.get("outcome"), expected: r.get("expected"), actual: r.get("actual") })
+        .collect();
+    Ok(DocumentResults { fields, lines, checks, extracted })
 }

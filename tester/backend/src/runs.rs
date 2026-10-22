@@ -2,7 +2,9 @@
 
 use crate::{
     app::{App, Control},
-    datasets, store,
+    datasets,
+    sources::Kind,
+    store,
 };
 use anyhow::{Result, bail};
 use serde::Deserialize;
@@ -13,19 +15,24 @@ use uuid::Uuid;
 pub const MAX_PARALLELISM: i64 = 32;
 const UPLOAD_BACKOFF: [u64; 4] = [1, 2, 4, 8];
 
-pub async fn start(app: &Arc<App>, dataset: &str, parallelism: i64) -> Result<store::Run> {
+pub async fn start(app: &Arc<App>, source: &str, dataset: &str, parallelism: i64) -> Result<store::Run> {
     if !datasets::valid_name(dataset) {
         bail!("invalid dataset name");
     }
     if !(1..=MAX_PARALLELISM).contains(&parallelism) {
         bail!("parallelism must be 1..{MAX_PARALLELISM}");
     }
-    let docs = datasets::documents(&app.cfg.datasets_dir, dataset)?;
-    app.golden(dataset).await?; // fail early if the golden set cannot be read
+    let src = app.source(source)?;
+    let docs = datasets::documents(src, dataset)?;
+    anyhow::ensure!(!docs.is_empty(), "dataset {dataset} has no documents");
+    if src.kind == Kind::Synthetic {
+        app.golden(source, dataset).await?; // fail early if the golden set cannot be read
+    }
     let id = Uuid::new_v4().to_string();
     let ids: Vec<String> = docs.iter().map(|d| d.invoice_id.clone()).collect();
-    store::create_run(&app.db, &id, dataset, parallelism, &ids).await?;
-    tracing::info!(run_id = %id, dataset, parallelism, documents = ids.len(), "run started");
+    let run = store::NewRun { id: &id, source, dataset, kind: src.kind.as_str(), parallelism };
+    store::create_run(&app.db, run, &ids).await?;
+    tracing::info!(run_id = %id, source, dataset, kind = src.kind.as_str(), parallelism, documents = ids.len(), "run started");
     spawn_uploader(app.clone(), id.clone()).await;
     Ok(store::get_run(&app.db, &id).await?.expect("just created"))
 }
@@ -69,7 +76,7 @@ async fn spawn_uploader(app: Arc<App>, run_id: String) {
 /// Uploads the run's pending documents, at most `parallelism` at a time, until done, paused or stopped.
 async fn upload_all(app: &Arc<App>, run_id: &str, control: watch::Receiver<Control>) -> Result<()> {
     let Some(run) = store::get_run(&app.db, run_id).await? else { return Ok(()) };
-    let paths: HashMap<String, std::path::PathBuf> = datasets::documents(&app.cfg.datasets_dir, &run.dataset)?
+    let paths: HashMap<String, std::path::PathBuf> = datasets::documents(app.source(&run.source)?, &run.dataset)?
         .into_iter()
         .map(|d| (d.invoice_id, d.path))
         .collect();

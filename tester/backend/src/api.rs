@@ -1,6 +1,6 @@
 //! HTTP API (tester/backend/specs/api.md). Paths under /api; the frontend is served from /.
 
-use crate::{app::App, datasets, objects, runs, store};
+use crate::{app::App, datasets, objects, runs, sources::Kind, store};
 use axum::{
     Json, Router,
     body::Body,
@@ -38,6 +38,7 @@ fn not_found(what: &str) -> ApiError {
 
 pub fn router(app: Arc<App>) -> Router {
     Router::new()
+        .route("/api/sources", get(list_sources))
         .route("/api/datasets", get(list_datasets))
         .route("/api/spend", get(spend))
         .route("/api/pipeline", get(pipeline))
@@ -53,14 +54,37 @@ pub fn router(app: Arc<App>) -> Router {
         .with_state(app)
 }
 
-async fn list_datasets(State(app): AppState) -> ApiResult<Json<Value>> {
-    let list = datasets::list(&app.cfg.datasets_dir)?;
-    let cost = app.cfg.cost_per_document_usd;
-    Ok(Json(json!(list
+async fn list_sources(State(app): AppState) -> Json<Value> {
+    Json(json!(app
+        .sources
         .iter()
-        .map(|d| json!({"name": d.name, "total_documents": d.total_documents, "total_units": d.total_units,
-                        "created_at": d.created_at, "estimated_cost_usd": d.total_documents as f64 * cost}))
-        .collect::<Vec<_>>())))
+        .map(|s| {
+            let unavailable = s.unavailable();
+            json!({"name": s.name, "kind": s.kind, "connection_type": s.connection_type,
+                   "available": unavailable.is_none(), "reason": unavailable, "required_fields": s.required_fields})
+        })
+        .collect::<Vec<_>>()))
+}
+
+#[derive(Deserialize)]
+struct DatasetQuery {
+    source: Option<String>,
+}
+
+async fn list_datasets(State(app): AppState, Query(q): Query<DatasetQuery>) -> ApiResult<Json<Value>> {
+    let cost = app.cfg.cost_per_document_usd;
+    let mut out = Vec::new();
+    for source in app.sources.iter().filter(|s| q.source.as_deref().is_none_or(|n| n == s.name)) {
+        if source.unavailable().is_some() {
+            continue; // shown with its reason in /api/sources
+        }
+        for d in datasets::list(source)? {
+            let mut v = serde_json::to_value(&d).map_err(anyhow::Error::from)?;
+            v["estimated_cost_usd"] = (d.total_documents as f64 * cost).into();
+            out.push(v);
+        }
+    }
+    Ok(Json(json!(out)))
 }
 
 async fn spend(State(app): AppState) -> ApiResult<Json<Value>> {
@@ -77,6 +101,7 @@ async fn pipeline(State(app): AppState) -> Json<Value> {
 
 #[derive(Deserialize)]
 struct StartRun {
+    source: String,
     dataset: String,
     #[serde(default = "default_parallelism")]
     parallelism: i64,
@@ -87,18 +112,27 @@ fn default_parallelism() -> i64 {
 }
 
 async fn start_run(State(app): AppState, Json(req): Json<StartRun>) -> ApiResult<(StatusCode, Json<store::Run>)> {
-    if !datasets::valid_name(&req.dataset) || !app.cfg.datasets_dir.join(&req.dataset).join("manifest.json").exists() {
-        return Err(ApiError(StatusCode::BAD_REQUEST, "unknown_dataset", format!("dataset {:?} not found", req.dataset)));
+    let source = app.source(&req.source).map_err(|_| not_found("source"))?;
+    let known = datasets::valid_name(&req.dataset)
+        && source.unavailable().is_none()
+        && datasets::list(source)?.iter().any(|d| d.name == req.dataset);
+    if !known {
+        return Err(not_found("dataset"));
     }
     if !(1..=runs::MAX_PARALLELISM).contains(&req.parallelism) {
         return Err(ApiError(StatusCode::BAD_REQUEST, "invalid_parallelism", format!("parallelism must be 1..{}", runs::MAX_PARALLELISM)));
     }
-    Ok((StatusCode::CREATED, Json(runs::start(&app, &req.dataset, req.parallelism).await?)))
+    Ok((StatusCode::CREATED, Json(runs::start(&app, &req.source, &req.dataset, req.parallelism).await?)))
 }
 
-async fn list_runs(State(app): AppState) -> ApiResult<Json<Value>> {
+#[derive(Deserialize)]
+struct RunQuery {
+    kind: Option<String>,
+}
+
+async fn list_runs(State(app): AppState, Query(q): Query<RunQuery>) -> ApiResult<Json<Value>> {
     let mut out = Vec::new();
-    for run in store::list_runs(&app.db).await? {
+    for run in store::list_runs(&app.db).await?.into_iter().filter(|r| q.kind.as_deref().is_none_or(|k| k == r.kind)) {
         let counts = store::counts(&app.db, &run.id).await?;
         let summary = store::summary(&app.db, &run.id).await?;
         let models = summary.as_ref().and_then(|s| s.get("models").cloned());
@@ -140,12 +174,15 @@ fn default_limit() -> usize {
 
 async fn list_documents(State(app): AppState, Path(id): Path<String>, Query(q): Query<DocQuery>) -> ApiResult<Json<Value>> {
     let run = store::get_run(&app.db, &id).await?.ok_or_else(|| not_found("run"))?;
-    let golden = app.golden(&run.dataset).await?;
+    // template and currency: golden metadata for synthetic runs, extracted currency for documents runs
+    let meta: std::collections::HashMap<String, (String, String)> = if run.kind == Kind::Documents.as_str() {
+        store::extracted_currencies(&app.db, &id).await?.into_iter().map(|(k, c)| (k, (String::new(), c))).collect()
+    } else {
+        app.golden(&run.source, &run.dataset).await?.iter().map(|(k, g)| (k.clone(), (g.template_id.clone(), g.currency.clone()))).collect()
+    };
     let mut docs: Vec<Value> = Vec::new();
     for d in store::documents(&app.db, &id).await? {
-        let g = golden.get(&d.invoice_id);
-        let template = g.map(|g| g.template_id.clone()).unwrap_or_default();
-        let currency = g.map(|g| g.currency.clone()).unwrap_or_default();
+        let (template, currency) = meta.get(&d.invoice_id).cloned().unwrap_or_default();
         if q.status.as_deref().is_some_and(|s| s != d.status)
             || q.template_id.as_deref().is_some_and(|t| t != template)
             || q.currency.as_deref().is_some_and(|c| c != currency)
@@ -165,18 +202,31 @@ async fn list_documents(State(app): AppState, Path(id): Path<String>, Query(q): 
 async fn get_document(State(app): AppState, Path((id, invoice_id)): Path<(String, String)>) -> ApiResult<Json<Value>> {
     let run = store::get_run(&app.db, &id).await?.ok_or_else(|| not_found("run"))?;
     let doc = store::documents(&app.db, &id).await?.into_iter().find(|d| d.invoice_id == invoice_id).ok_or_else(|| not_found("document"))?;
-    let (fields, lines, extracted) = store::document_results(&app.db, &id, &invoice_id).await?;
-    let golden = app.golden(&run.dataset).await?;
-    let g = golden.get(&invoice_id);
+    let r = store::document_results(&app.db, &id, &invoice_id).await?;
+    let extracted = r.extracted.and_then(|s| serde_json::from_str::<Value>(&s).ok());
     let artifacts = available_artifacts(&app, doc.document_id.as_deref()).await;
+    if run.kind == Kind::Documents.as_str() {
+        return Ok(Json(json!({
+            "kind": run.kind,
+            "document": doc,
+            "currency": extracted.as_ref().and_then(|e| e.get("currency").cloned()),
+            "fields": r.fields,
+            "checks": r.checks,
+            "extracted": extracted,
+            "artifacts": artifacts,
+        })));
+    }
+    let golden = app.golden(&run.source, &run.dataset).await?;
+    let g = golden.get(&invoice_id);
     Ok(Json(json!({
+        "kind": run.kind,
         "document": doc,
         "template_id": g.map(|g| g.template_id.clone()),
         "currency": g.map(|g| g.currency.clone()),
         "language": g.map(|g| g.language.clone()),
-        "fields": fields,
-        "lines": lines,
-        "extracted": extracted.and_then(|s| serde_json::from_str::<Value>(&s).ok()),
+        "fields": r.fields,
+        "lines": r.lines,
+        "extracted": extracted,
         "golden": g.map(|g| &g.invoice),
         "artifacts": artifacts,
     })))
@@ -219,7 +269,8 @@ async fn artifact(State(app): AppState, Path((id, invoice_id, name)): Path<(Stri
         _ => "application/json",
     };
     let data = if name == "original.pdf" {
-        let path = datasets::document_path(&app.cfg.datasets_dir, &run.dataset, &invoice_id).map_err(|_| not_found("document"))?;
+        let source = app.source(&run.source).map_err(|_| not_found("source"))?;
+        let path = datasets::document_path(source, &run.dataset, &invoice_id).map_err(|_| not_found("document"))?;
         tokio::fs::read(path).await.map_err(anyhow::Error::from)?
     } else {
         let doc = store::documents(&app.db, &id).await?.into_iter().find(|d| d.invoice_id == invoice_id).ok_or_else(|| not_found("document"))?;
@@ -248,9 +299,6 @@ async fn healthz(State(app): AppState) -> Response {
     }
     if let Err(e) = app.objects.check().await {
         fail("minio", e.to_string());
-    }
-    if let Err(e) = std::fs::read_dir(&app.cfg.datasets_dir) {
-        fail("datasets", format!("{}: {e}", app.cfg.datasets_dir.display()));
     }
     // Shape: /specs/pipeline-contracts.md, Health endpoint.
     if failing.is_empty() {

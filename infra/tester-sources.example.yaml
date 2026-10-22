@@ -1,0 +1,22 @@
+# Tester data sources (tester/backend/specs/data-sources.md). Copy to tester-sources.yaml (gitignored)
+# and set the paths: host paths of a directory or a symlink to one. `make up` mounts each source
+# read-only into the tester at /sources/<name>.
+sources:
+  # docsynth runs with golden sets; every subdirectory (run-001, ...) is a dataset.
+  - name: synthetic
+    kind: synthetic
+    connection:
+      type: local
+      path: /home/dev/docsynth/invoice-data-extractor-corpus/blobs
+
+  # Plain PDFs without a golden set (for example real invoices). Subdirectories are datasets; PDFs
+  # directly in the directory form a dataset named after the source.
+  - name: real
+    kind: documents
+    connection:
+      type: local
+      path: /path/to/real/invoices
+    # Optional; the default is shown. Field names: fields-extractor/specs/extraction-schema.md.
+    required_fields:
+      invoice: [supplier_name, invoice_number, issue_date, currency, subtotal, tax_total, grand_total]
+      line: [description, quantity, amount]

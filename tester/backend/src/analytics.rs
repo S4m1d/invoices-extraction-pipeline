@@ -1,5 +1,5 @@
-//! Run summary (tester/backend/specs/overview.md, Analytics), computed with DuckDB over the run's
-//! results joined with the golden metadata.
+//! Run summary (tester/backend/specs/overview.md, Analytics; documents runs: validation.md, Summary),
+//! computed with DuckDB over the run's results, joined with the golden metadata for synthetic runs.
 
 use crate::{app::App, store};
 use anyhow::Result;
@@ -9,7 +9,10 @@ use sqlx::Row;
 use std::sync::Arc;
 
 pub async fn summary(app: &Arc<App>, run: &store::Run) -> Result<Value> {
-    let golden = app.golden(&run.dataset).await?;
+    if run.kind == "documents" {
+        return documents_summary(app, run).await;
+    }
+    let golden = app.golden(&run.source, &run.dataset).await?;
     let docs = sqlx::query(
         "SELECT invoice_id, status, error_stage, error_code, extraction_model, prompt_version,
                 (julianday(finished_at) - julianday(uploaded_at)) * 86400.0 AS seconds
@@ -24,12 +27,7 @@ pub async fn summary(app: &Arc<App>, run: &store::Run) -> Result<Value> {
         .await?;
     let lines = sqlx::query("SELECT outcome FROM run_line_results WHERE run_id = ?").bind(&run.id).fetch_all(&app.db).await?;
 
-    let wall = sqlx::query_scalar::<_, Option<f64>>(
-        "SELECT (julianday(coalesce(finished_at, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))) - julianday(started_at)) * 86400.0 FROM runs WHERE id = ?",
-    )
-    .bind(&run.id)
-    .fetch_one(&app.db)
-    .await?;
+    let wall = wall_clock(app, &run.id).await?;
 
     let conn = Connection::open_in_memory()?;
     conn.execute_batch(
@@ -78,21 +76,105 @@ pub async fn summary(app: &Arc<App>, run: &store::Run) -> Result<Value> {
              FROM docs d GROUP BY d.{dim} ORDER BY d.{dim}"
         ))
     };
-    Ok(json!({
+    let mut out = common(&conn, run, wall)?;
+    out.insert("fields".into(), json!(rows(&format!("SELECT field, bool_or(is_line) AS line_field, {field_stats} FROM fields GROUP BY field ORDER BY bool_or(is_line), field"))?));
+    out.insert("lines".into(), json!(rows("SELECT count_if(outcome = 'compared') AS compared, count_if(outcome = 'missing') AS missing, count_if(outcome = 'extra') AS extra FROM lines")?.pop()));
+    out.insert("by_template".into(), json!(breakdown("template_id")?));
+    out.insert("by_currency".into(), json!(breakdown("currency")?));
+    out.insert("by_language".into(), json!(breakdown("language")?));
+    Ok(Value::Object(out))
+}
+
+/// Summary of a documents run: required fields, checks and the extracted currency instead of golden accuracy.
+async fn documents_summary(app: &Arc<App>, run: &store::Run) -> Result<Value> {
+    let docs = sqlx::query(
+        "SELECT invoice_id, status, error_stage, error_code, extraction_model, prompt_version,
+                (julianday(finished_at) - julianday(uploaded_at)) * 86400.0 AS seconds,
+                json_extract(extracted_json, '$.currency') AS currency
+         FROM run_documents WHERE run_id = ?",
+    )
+    .bind(&run.id)
+    .fetch_all(&app.db)
+    .await?;
+    let fields = sqlx::query("SELECT position IS NOT NULL AS is_line, field, outcome FROM run_field_results WHERE run_id = ?")
+        .bind(&run.id)
+        .fetch_all(&app.db)
+        .await?;
+    let checks = sqlx::query("SELECT \"check\", outcome FROM run_check_results WHERE run_id = ?").bind(&run.id).fetch_all(&app.db).await?;
+    let wall = wall_clock(app, &run.id).await?;
+
+    let conn = Connection::open_in_memory()?;
+    conn.execute_batch(
+        "CREATE TABLE docs (invoice_id TEXT, status TEXT, error_stage TEXT, error_code TEXT, model TEXT, prompt TEXT,
+                            seconds DOUBLE, currency TEXT);
+         CREATE TABLE fields (is_line BOOLEAN, field TEXT, outcome TEXT);
+         CREATE TABLE checks (name TEXT, outcome TEXT);",
+    )?;
+    {
+        let mut a = conn.appender("docs")?;
+        for d in &docs {
+            a.append_row(params![
+                d.get::<String, _>("invoice_id"),
+                d.get::<String, _>("status"),
+                d.get::<Option<String>, _>("error_stage"),
+                d.get::<Option<String>, _>("error_code"),
+                d.get::<Option<String>, _>("extraction_model"),
+                d.get::<Option<String>, _>("prompt_version"),
+                d.get::<Option<f64>, _>("seconds"),
+                d.get::<Option<String>, _>("currency"),
+            ])?;
+        }
+        let mut a = conn.appender("fields")?;
+        for f in &fields {
+            a.append_row(params![f.get::<bool, _>("is_line"), f.get::<String, _>("field"), f.get::<String, _>("outcome")])?;
+        }
+        let mut a = conn.appender("checks")?;
+        for c in &checks {
+            a.append_row(params![c.get::<String, _>("check"), c.get::<String, _>("outcome")])?;
+        }
+    }
+    let rows = |sql: &str| query_json(&conn, sql);
+    let mut out = common(&conn, run, wall)?;
+    out.insert("required_fields".into(), json!(rows(
+        "SELECT field, bool_or(is_line) AS line_field, count_if(outcome = 'present') AS present, count_if(outcome = 'missing') AS missing
+         FROM fields GROUP BY field ORDER BY bool_or(is_line), field"
+    )?));
+    out.insert("checks".into(), json!(rows(
+        "SELECT name AS \"check\", count_if(outcome = 'pass') AS pass, count_if(outcome = 'fail') AS fail,
+                count_if(outcome = 'not_applicable') AS not_applicable
+         FROM checks GROUP BY name ORDER BY name"
+    )?));
+    out.insert("by_currency".into(), json!(rows(
+        "SELECT currency AS value, count(*) AS documents, count_if(status = 'passed') AS passed FROM docs GROUP BY currency ORDER BY currency"
+    )?));
+    Ok(Value::Object(out))
+}
+
+async fn wall_clock(app: &Arc<App>, run_id: &str) -> Result<Option<f64>> {
+    Ok(sqlx::query_scalar::<_, Option<f64>>(
+        "SELECT (julianday(coalesce(finished_at, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))) - julianday(started_at)) * 86400.0 FROM runs WHERE id = ?",
+    )
+    .bind(run_id)
+    .fetch_one(&app.db)
+    .await?)
+}
+
+/// Parts of the summary shared by both kinds, from the `docs` table.
+fn common(conn: &Connection, run: &store::Run, wall: Option<f64>) -> Result<serde_json::Map<String, Value>> {
+    let rows = |sql: &str| query_json(conn, sql);
+    let v = json!({
+        "kind": run.kind,
         "documents": rows("SELECT count(*) AS total, count_if(status = 'passed') AS passed, count_if(status = 'failed') AS failed,
                                   count_if(status = 'error') AS error, count_if(status = 'timeout') AS timeout,
                                   count_if(status IN ('pending', 'uploaded')) AS unfinished FROM docs")?.pop(),
         "overlapped": run.overlapped,
-        "fields": rows(&format!("SELECT field, bool_or(is_line) AS line_field, {field_stats} FROM fields GROUP BY field ORDER BY bool_or(is_line), field"))?,
-        "lines": rows("SELECT count_if(outcome = 'compared') AS compared, count_if(outcome = 'missing') AS missing, count_if(outcome = 'extra') AS extra FROM lines")?.pop(),
-        "by_template": breakdown("template_id")?,
-        "by_currency": breakdown("currency")?,
-        "by_language": breakdown("language")?,
         "errors": rows("SELECT error_stage AS stage, error_code AS code, count(*) AS documents FROM docs WHERE status = 'error' GROUP BY ALL ORDER BY documents DESC")?,
         "models": rows("SELECT model, prompt, count(*) AS documents FROM docs WHERE model IS NOT NULL GROUP BY ALL ORDER BY documents DESC")?,
         "durations": rows("SELECT median(seconds) AS median_s, quantile_cont(seconds, 0.95) AS p95_s, max(seconds) AS max_s FROM docs WHERE seconds IS NOT NULL")?.pop(),
         "wall_clock_s": wall,
-    }))
+    });
+    let Value::Object(m) = v else { unreachable!() };
+    Ok(m)
 }
 
 /// Runs sql and returns each row as a JSON object keyed by column name. Column names are read after
