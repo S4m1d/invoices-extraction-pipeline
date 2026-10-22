@@ -27,7 +27,7 @@ Invoice data extraction pipeline (study project, Spec-Driven Development). Overv
 | Module | Path | Stack | Spec |
 |---|---|---|---|
 | Ingestor | `ingestor/` | Go | `ingestor/specs/` |
-| Text extractor | `text-extractor/` | Python, pdfplumber | `text-extractor/specs/` |
+| Text extractor | `text-extractor/` | Python, pdfplumber, Tesseract | `text-extractor/specs/` |
 | Fields extractor | `fields-extractor/` | Python, Pydantic, Anthropic SDK (provider abstraction) | `fields-extractor/specs/` |
 | Integrator | `integrator/` | Go, PostgreSQL | `integrator/specs/` |
 | Tester backend | `tester/backend/` | Rust, DuckDB, SQLite, PostgreSQL | `tester/backend/specs/` |
@@ -40,6 +40,6 @@ Each module keeps its code in `src/` and its specification in `specs/`.
 
 - Services communicate only through RabbitMQ; files live in MinIO; messages carry references, not file bytes.
 - Everything runs in Docker containers.
-- MVP input is clean, text-based PDFs; no OCR yet. Do not add scan handling outside `text-extractor`.
+- Input is clean, text-based PDFs and light scans; scanned pages are OCRed inside `text-extractor` (`text-extractor/specs/ocr.md`). Do not add scan handling outside `text-extractor`.
 - LLM access goes through the provider abstraction; only Anthropic is implemented, other providers must fail explicitly.
 - Test datasets follow [`tester/backend/specs/dataset-format.md`](tester/backend/specs/dataset-format.md).

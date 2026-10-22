@@ -4,7 +4,8 @@ import pypdf
 import pytest
 
 from tests import pdfs
-from text_extractor.convert import NoTextLayer, PdfUnreadable, _normalize, _render, convert
+from text_extractor.convert import NoTextLayer, OcrFailed, PdfUnreadable, _normalize, _render, convert
+from text_extractor.ocr import OcrError
 
 DOC = "0f8fad5b-d9cb-469f-a165-70867728950e"
 
@@ -38,17 +39,74 @@ def test_empty_page_inside_text_document_keeps_its_section():
 
 
 def test_no_text_layer():
+    ocr = pdfs.FakeOcr()
     with pytest.raises(NoTextLayer) as exc:
-        convert(pdfs.build([[], []]), DOC)
+        convert(pdfs.build([[], []]), DOC, ocr)
     assert exc.value.code == "no_text_layer"
     assert exc.value.info.page_count == 2
     assert exc.value.info.chars_per_page == [0, 0]
     assert exc.value.info.images_per_page == [0, 0]
+    assert exc.value.info.page_kinds == ["empty", "empty"]
+    assert exc.value.info.ocr_chars_per_page == [None, None]
+    assert ocr.pages == []  # nothing to OCR
+
+
+def test_text_document_is_not_ocred():
+    ocr = pdfs.FakeOcr()
+    res = convert(pdfs.INVOICE, DOC, ocr)
+    assert ocr.pages == [] and res.ocr_pages == []
+    assert res.info.page_kinds == ["text"] and res.info.ocr_chars_per_page == [None]
+    assert "(OCR)" not in res.markdown and "ocr_pages" not in res.markdown
+
+
+def test_scanned_pages_are_ocred_and_marked():
+    ocr = pdfs.FakeOcr({0: "   ACME   Invoice   \n\n\n   Total  $9.50", 1: "  page two"})
+    res = convert(pdfs.scan(2), DOC, ocr)
+    assert ocr.pages == [0, 1]
+    assert res.ocr_pages == [1, 2]
+    assert res.info.page_kinds == ["scan", "scan"]
+    assert res.info.chars_per_page == [0, 0] and res.info.images_per_page == [1, 1]
+    assert res.info.ocr_chars_per_page == [21, 7]
+    assert res.markdown == (
+        f"<!-- document_id: {DOC}; pages: 2; ocr_pages: 1,2 -->\n\n"
+        "## Page 1 of 2 (OCR)\n\n```text\nACME   Invoice\n\nTotal  $9.50\n```\n\n"
+        "## Page 2 of 2 (OCR)\n\n```text\npage two\n```\n"
+    )
+
+
+def test_mixed_document_ocrs_only_scanned_pages():
+    pdf = pdfs.concat(pdfs.build([[(72, 700, 12, "typed page")], []]), pdfs.scan(1))
+    ocr = pdfs.FakeOcr({2: "scanned attachment"})
+    res = convert(pdf, DOC, ocr)
+    assert ocr.pages == [2]
+    assert res.info.page_kinds == ["text", "empty", "scan"]
+    assert [line for line in res.markdown.splitlines() if line.startswith(("<!--", "## "))] == [
+        f"<!-- document_id: {DOC}; pages: 3; ocr_pages: 3 -->",
+        "## Page 1 of 3",
+        "## Page 2 of 3",
+        "## Page 3 of 3 (OCR)",
+    ]
+    assert "typed page" in res.markdown and "scanned attachment" in res.markdown
+
+
+def test_scan_without_readable_text_is_no_text_layer():
+    with pytest.raises(NoTextLayer) as exc:
+        convert(pdfs.scan(2), DOC, pdfs.FakeOcr({0: "  \n "}))
+    assert exc.value.info.page_kinds == ["scan", "scan"]
+    assert exc.value.info.ocr_chars_per_page == [0, 0]
+
+
+def test_ocr_error_fails_document():
+    with pytest.raises(OcrFailed) as exc:
+        convert(pdfs.scan(2), DOC, pdfs.FakeOcr(error=OcrError("tesseract timed out after 60 s")))
+    assert exc.value.code == "ocr_failed"
+    assert str(exc.value) == "page 1: tesseract timed out after 60 s"
+    assert exc.value.info.page_kinds == ["scan", "scan"]
 
 
 def test_only_watermark_text_is_no_text_layer():
     with pytest.raises(NoTextLayer) as exc:
-        convert(pdfs.build([[(100, 300, 300, "DRAFT")]]), DOC)
+        convert(pdfs.build([[(100, 300, 300, "DRAFT")]]), DOC, pdfs.FakeOcr())
     assert exc.value.info.chars_per_page == [0]
 
 

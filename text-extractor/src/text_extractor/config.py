@@ -1,6 +1,7 @@
 """Configuration from the environment (see text-extractor/specs/overview.md)."""
 
 import os
+import re
 from dataclasses import dataclass
 
 _LEVELS = {"debug", "info", "warn", "warning", "error"}
@@ -20,6 +21,8 @@ class Config:
     http_host: str
     http_port: int
     log_level: str
+    ocr_lang: str
+    ocr_page_timeout: float  # seconds
 
 
 def load(env: dict[str, str] | None = None) -> Config:
@@ -52,6 +55,17 @@ def load(env: dict[str, str] | None = None) -> Config:
     if level not in _LEVELS:
         invalid.append("LOG_LEVEL")
 
+    ocr_lang = optional("TEXT_EXTRACTOR_OCR_LANG", "eng")
+    if not re.fullmatch(r"\w+(\+\w+)*", ocr_lang):
+        invalid.append("TEXT_EXTRACTOR_OCR_LANG")
+
+    timeout = 0.0
+    m = re.fullmatch(r"(\d+(?:\.\d+)?)s?", optional("TEXT_EXTRACTOR_OCR_PAGE_TIMEOUT", "60s"))
+    if m and float(m[1]) > 0:
+        timeout = float(m[1])
+    else:
+        invalid.append("TEXT_EXTRACTOR_OCR_PAGE_TIMEOUT")
+
     cfg = Config(
         amqp_url=required("AMQP_URL"),
         minio_endpoint=required("MINIO_ENDPOINT"),
@@ -61,6 +75,8 @@ def load(env: dict[str, str] | None = None) -> Config:
         http_host=host,
         http_port=port,
         log_level="warning" if level == "warn" else level,
+        ocr_lang=ocr_lang,
+        ocr_page_timeout=timeout,
     )
     if missing or invalid:
         raise ConfigError(f"config: missing [{', '.join(missing)}], invalid [{', '.join(invalid)}]")

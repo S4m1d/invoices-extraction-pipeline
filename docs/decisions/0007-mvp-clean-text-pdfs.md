@@ -1,6 +1,6 @@
 # 0007. MVP scope: clean text PDFs, no OCR
 
-- Status: accepted
+- Status: superseded by 0014
 - Date: 2026-10-13
 
 ## Context

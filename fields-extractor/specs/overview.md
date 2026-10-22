@@ -143,8 +143,9 @@ Provider details (timeouts, retries, status mapping): [`llm-providers.md`](llm-p
 |---|---|
 | `v1` | Initial prompt |
 | `v2` | `grand_total` is the amount due after deposits; totals-area rows are not lines; on grouped (telecom) invoices each usage record is a line, group subtotals are not. Based on a 10-invoice run-001 sample with v1. |
-| `v3` (in use) | `quantity` is the number without its unit (telecom prints `214.6 megabytes`); with v2 this failed validation on every telecom invoice and cost a feedback retry. |
-- The prompt contains the extraction rules from `extraction-schema.md` (top-level lines only, no item codes in descriptions, decimal format, currency inference including USD vs CAD, `null` for missing optional fields) and says that the input is layout text, one fenced block per page.
+| `v3` | `quantity` is the number without its unit (telecom prints `214.6 megabytes`); with v2 this failed validation on every telecom invoice and cost a feedback retry. |
+| `v4` (in use) | Pages headed `## Page i of N (OCR)` are scans whose text may contain OCR misreads (`text-extractor/specs/ocr.md`); misread values are recovered from the invoice's arithmetic, never invented. |
+- The prompt contains the extraction rules from `extraction-schema.md` (top-level lines only, no item codes in descriptions, decimal format, currency inference including USD vs CAD, `null` for missing optional fields) and says that the input is layout text, one fenced block per page, and that pages marked `(OCR)` may contain recognition errors.
 - The model and prompt version are logged per document and stored as object metadata on `extracted.json`.
 
 ## Health, logging, configuration

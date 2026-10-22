@@ -2,13 +2,13 @@
 
 ## Purpose
 
-Takes an invoice PDF, understands its layout and extracts text while preserving the layout, producing a markdown file.
+Takes an invoice PDF, understands its layout and extracts text while preserving the layout, producing a markdown file. Scanned pages are OCRed (see [`ocr.md`](ocr.md)).
 
 This module combines two logical pipeline steps, layout analysis and text extraction (ADR 0003).
 
 ## Stack
 
-Python, pdfplumber.
+Python, pdfplumber; Tesseract OCR for scanned pages (pytesseract, pypdfium2 for rendering).
 
 Python 3.13, dependencies managed with `uv`; `pika` (RabbitMQ), `minio` (object storage), standard `logging` with a JSON formatter; `pytest` for tests.
 
@@ -22,13 +22,16 @@ Python 3.13, dependencies managed with `uv`; `pika` (RabbitMQ), `minio` (object 
 
 ## Internal design
 
-For the MVP (clean text PDFs) both steps are done with pdfplumber: per page, watermark characters are filtered out and the page text is extracted in layout mode.
+Each page is classified after watermark removal (see [`ocr.md`](ocr.md), Page classification):
 
-When scan processing is added, the module becomes an internal sub-pipeline (e.g. OCR -> layout analysis -> text assembly). The module's external contract (PDF in, markdown out) must not change.
+- Text pages: both steps are done with pdfplumber: watermark characters are filtered out and the page text is extracted in layout mode.
+- Scanned pages (no text, at least one image): the page is rendered and OCRed with Tesseract, and the recognized words are assembled into layout text on the same character grid (render -> OCR -> layout assembly).
 
-## Bounds (MVP)
+The module's external contract (PDF in, markdown out) does not change.
 
-Clean, text-based PDFs only. No OCR.
+## Bounds
+
+Clean, text-based PDFs and light scans (reference: `run003`). Known limitations for scans are listed in [`ocr.md`](ocr.md), Not handled in this version.
 
 ## Processing
 
@@ -36,7 +39,7 @@ For each message:
 
 1. Parse and validate the envelope (see Input validation). Invalid: reject without requeue, so it goes to `documents.ingested.dlq`.
 2. Read `object_key` from object storage.
-3. Open the PDF and convert it (see [`output-format.md`](output-format.md)).
+3. Open the PDF and convert it: text pages with pdfplumber, scanned pages with OCR (see [`output-format.md`](output-format.md), [`ocr.md`](ocr.md)).
 4. Write `documents/{document_id}/layout.md`.
 5. Publish the envelope to `documents.text_extracted` (persistent, mandatory, publisher confirms), with `stage` = `text-extractor`, `object_key` = the layout key, and `document_id` and `correlation_id` copied unchanged.
 6. Ack the input message.
@@ -55,12 +58,13 @@ Decision record for the general rules: `docs/decisions/0011-failure-handling.md`
 |---|---|---|---|
 | `object_not_found` | `original.pdf` does not exist | no | no |
 | `pdf_unreadable` | Not a PDF, corrupt, or encrypted | no | yes |
-| `no_text_layer` | No page contains any text after watermark removal (scanned or image-only PDF) | no | yes |
+| `no_text_layer` | After text extraction and OCR, no page contains any text | no | yes |
+| `ocr_failed` | Tesseract fails or times out on a page (see [`ocr.md`](ocr.md)) | no | yes |
 | `storage_unavailable` | MinIO errors or timeouts on read or write | yes | no |
 | `internal_error` | Unexpected exception | no | no |
 
 - Permanent errors (not retried) publish a failure message to `documents.failed` at once and ack the input.
-- The `no_text_layer` check counts characters left after watermark removal (see `output-format.md`), so a scanned PDF with a text watermark is still detected. Pages without text in an otherwise text-based PDF are not an error.
+- Page classification counts characters left after watermark removal (see `output-format.md`), so a scanned page with a text watermark is still OCRed. Empty pages in a document that has text elsewhere are not an error.
 - `storage_unavailable` is retried in-process: 3 attempts in total, waiting 1 s and then 5 s between them. After the last attempt the document is failed with that code.
 - Each storage call times out after 10 s (connect: 5 s), so a hanging MinIO fails a document after about 36 s.
 - If RabbitMQ itself fails (publish or ack), the process does not ack; it reconnects, and the broker redelivers the message.
@@ -68,7 +72,7 @@ Decision record for the general rules: `docs/decisions/0011-failure-handling.md`
 
 ### Diagnostics file
 
-For PDF reading problems (`pdf_unreadable`, `no_text_layer`) a person should look at the PDF. Before publishing the failure message, the module writes `text-extractor-failures/{document_id}.json` (bucket `text-extractor-failures`, see `/specs/pipeline-contracts.md`):
+For PDF reading problems (`pdf_unreadable`, `no_text_layer`, `ocr_failed`) a person should look at the PDF. Before publishing the failure message, the module writes `text-extractor-failures/{document_id}.json` (bucket `text-extractor-failures`, see `/specs/pipeline-contracts.md`):
 
 ```json
 {
@@ -81,13 +85,15 @@ For PDF reading problems (`pdf_unreadable`, `no_text_layer`) a person should loo
   "page_count": 3,
   "chars_per_page": [0, 0, 0],
   "images_per_page": [1, 1, 1],
+  "page_kinds": ["scan", "scan", "scan"],
+  "ocr_chars_per_page": [0, 0, 0],
   "pdf_metadata": { "Producer": "...", "Creator": "..." },
   "created_at": "2026-10-14T12:00:00Z"
 }
 ```
 
-- `page_count`, `chars_per_page`, `images_per_page` and `pdf_metadata` are `null` when the PDF cannot be opened (`pdf_unreadable`).
-- `chars_per_page` counts characters after watermark removal.
+- `page_count`, `chars_per_page`, `images_per_page`, `page_kinds`, `ocr_chars_per_page` and `pdf_metadata` are `null` when the PDF cannot be opened (`pdf_unreadable`).
+- `chars_per_page` counts text-layer characters after watermark removal. `page_kinds` and `ocr_chars_per_page` are described in [`ocr.md`](ocr.md).
 - `pdf_metadata` is the PDF's document information dictionary as strings; empty object if there is none.
 - If writing the diagnostics file fails, it is retried like `storage_unavailable`; if it still fails, the document is failed with `storage_unavailable`.
 
@@ -101,7 +107,7 @@ HTTP `GET /healthz` on `TEXT_EXTRACTOR_HTTP_ADDR` (default `:8080`), same shape 
 
 ## Logging and correlation
 
-As required by `/specs/pipeline-contracts.md`: JSON log lines on stdout; every entry about a message has `correlation_id` and `document_id`; MinIO requests carry `X-Correlation-ID`; published messages carry it in the AMQP `correlation_id` property and the `X-Correlation-ID` header. Each processed message gets one summary entry (`document_id`, pages, output bytes, duration, result).
+As required by `/specs/pipeline-contracts.md`: JSON log lines on stdout; every entry about a message has `correlation_id` and `document_id`; MinIO requests carry `X-Correlation-ID`; published messages carry it in the AMQP `correlation_id` property and the `X-Correlation-ID` header. Each processed message gets one summary entry (`document_id`, pages, OCRed pages, output bytes, duration, OCR duration, result).
 
 pdfminer's own warnings (for example `Could not get FontBBox`, emitted for most run-001 documents) are suppressed.
 
@@ -116,6 +122,8 @@ pdfminer's own warnings (for example `Could not get FontBBox`, emitted for most 
 | `MINIO_USE_SSL` | no | `false` | |
 | `TEXT_EXTRACTOR_HTTP_ADDR` | no | `:8080` | Health endpoint address |
 | `LOG_LEVEL` | no | `info` | |
+| `TEXT_EXTRACTOR_OCR_LANG` | no | `eng` | Tesseract language(s), see [`ocr.md`](ocr.md) |
+| `TEXT_EXTRACTOR_OCR_PAGE_TIMEOUT` | no | `60s` | OCR time limit per page |
 
 ## Interfaces
 
@@ -127,5 +135,6 @@ pdfminer's own warnings (for example `Could not get FontBBox`, emitted for most 
 
 None. Resolved:
 
-- Non-text PDFs: fail with `no_text_layer` and write a diagnostics file (see Errors).
+- Non-text PDFs: scanned pages are OCRed ([`ocr.md`](ocr.md)); a document still without text fails with `no_text_layer` and writes a diagnostics file (see Errors).
+- Acceptance for scans: no minimum field accuracy; the first run003 measurement is the baseline (see [`ocr.md`](ocr.md), Acceptance).
 - Multi-page invoices: all pages in order, one section per page (see `output-format.md`).
