@@ -23,8 +23,8 @@ pdfplumber's text in layout mode keeps the visual arrangement: columns stay apar
 ...
 ````
 
-- First line: an HTML comment with `document_id` and page count (for debugging; consumers must not depend on it).
-- One section per page, in document order, headed `## Page {i} of {N}`.
+- First line: an HTML comment with `document_id` and page count (for debugging; consumers must not depend on it). If any page was OCRed, it also has `ocr_pages` with their numbers: `<!-- document_id: {document_id}; pages: 3; ocr_pages: 2,3 -->`.
+- One section per page, in document order, headed `## Page {i} of {N}`. Pages whose text comes from OCR are headed `## Page {i} of {N} (OCR)` (see [`ocr.md`](ocr.md)); their text may contain recognition errors.
 - Page text sits in a fenced block with info string `text`. If the page text contains a run of backticks as long as the fence, the fence is lengthened (```` ```` ````, and so on) so the block cannot end early.
 - Pages without any text are kept as a section with an empty block, so page numbers stay aligned with the PDF.
 
@@ -35,6 +35,7 @@ pdfplumber's text in layout mode keeps the visual arrangement: columns stay apar
 - Runs of blank lines are collapsed to one blank line; leading and trailing blank lines of a page are removed.
 - The common left indentation of the page is removed. Spacing inside lines is kept as extracted.
 - Running headers and footers (for example `... Invoice No. ... Page 2 of 4`) are kept as they are. Removing them is not needed for extraction and would risk dropping real content.
+- These rules apply to OCRed pages too, after layout assembly (see [`ocr.md`](ocr.md)).
 - Text is not otherwise changed: no spelling, number, date or currency normalization (that is `fields-extractor`'s job).
 
 ## Example
