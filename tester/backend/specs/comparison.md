@@ -40,9 +40,26 @@ Golden lines are the top-level ones (`parent_line_no` null), in printed order (b
 | `passed` | Every header field and every line field is `match`, and there are no `missing` or `extra` lines |
 | `failed` | Otherwise: any `mismatch`, `missing` or `unexpected` field, or any `missing` or `extra` line |
 | `error` | The pipeline reported a failure (`documents.failed`) or the upload failed |
-| `timeout` | Not finished in time (`overview.md`, Completion) |
+| `cancelled` | The run was stopped while the document was in the pipeline (`overview.md`, Completion) |
+| `timeout` | Runs from before timeouts were removed only (ADR 0016) |
 
 A `missing` field fails the document, also where the value is not printed on the invoice (except telecom `unit_price`, above). Known case in run-001: `recipient_name` and `due_date` on the `receipt-compact-01` template.
+
+## Metrics
+
+Computed over the field outcomes above, so only documents that were compared (`passed` or `failed`) count; `error`, `cancelled` and `timeout` documents have no outcomes and show only in the pass rate and the status counts. Header fields and line fields (`description`, `quantity`, `unit_price`, `amount` of compared lines) are reported separately; fields of `missing` and `extra` lines have no outcomes and appear only in the line counts.
+
+| Metric | Definition |
+|---|---|
+| Field accuracy | `match / (match + mismatch + missing + unexpected)` |
+| Precision | `match / (match + mismatch + unexpected)`: of the values the pipeline extracted, the share that is correct |
+| Recall | `match / (match + mismatch + missing)`: of the values the golden set has, the share extracted correctly |
+| F1 | `2 · P · R / (P + R)` |
+| Header-only document accuracy | Compared documents whose header fields are all `match`, divided by compared documents. Unlike the pass rate it ignores lines, so long telecom invoices do not dominate it |
+
+A `match` where both values are null counts in the numerators and denominators like any other match. Overall values are micro averages: counts are summed over all fields of the group, then divided. Precision / recall / F1 per field use that field's counts. A metric whose denominator is 0 is null (shown as `–`); F1 is null when precision or recall is, and 0 when both are 0.
+
+On run-001, header-only document accuracy has the same 88 % ceiling as the pass rate (`receipt-compact-01`, below), since that template's `missing` fields are header fields.
 
 ## Expected ceiling on run-001
 

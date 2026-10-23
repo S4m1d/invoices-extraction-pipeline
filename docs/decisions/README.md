@@ -36,3 +36,4 @@ Accepted ADRs are not rewritten; a changed decision gets a new ADR that supersed
 | [0013](0013-minio-image-from-chainguard.md) | MinIO image from Chainguard, pinned by digest | accepted |
 | [0014](0014-scan-processing-with-tesseract.md) | Scan processing: per-page OCR with Tesseract in text-extractor | accepted |
 | [0015](0015-tester-data-sources.md) | Tester data sources: YAML-configured, synthetic and document-only kinds | accepted |
+| [0016](0016-tester-no-document-timeout.md) | Tester: no per-document timeout; Stop cancels documents in the pipeline | accepted |

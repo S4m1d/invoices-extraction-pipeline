@@ -44,9 +44,10 @@ A failed check therefore means "look at this document", not necessarily a wrong 
 | `passed` | Every required field is `present` and no check is `fail` |
 | `failed` | Any required field `missing`, or any check `fail` |
 | `error` | The pipeline reported a failure (`documents.failed`) or the upload failed |
-| `timeout` | Not finished in time (`overview.md`, Completion) |
+| `cancelled` | The run was stopped while the document was in the pipeline (`overview.md`, Completion) |
+| `timeout` | Runs from before timeouts were removed only (ADR 0016) |
 
-`error` and `timeout` are decided exactly as for synthetic runs.
+`error` and `cancelled` are decided exactly as for synthetic runs.
 
 ## Summary
 

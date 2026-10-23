@@ -46,11 +46,13 @@ A document is finished when one of these happens first:
 
 - Its `invoices` row appears in PostgreSQL (polled every 2 s for all unfinished documents, by `document_id`).
 - A failure message for it arrives on `documents.failed` (the tester consumes this queue, contract): status `error` with the failure's `stage`, `error_code` and `error_message`. Exception: `duplicate_document` (integrator, ADR 0012) is ignored when the row exists, since it comes from a redelivery after a successful write.
-- No row and no failure within `TESTER_DOCUMENT_TIMEOUT` (default 10 min) of active pipeline time after its upload: `timeout`.
+- The run is stopped while the document is still in the pipeline: `cancelled` (Stop, below).
+
+There is no timeout: a document stays `uploaded` until its row or its failure arrives, however long that takes. `parallelism` limits only the uploads, which the ingestor accepts within seconds, so a whole dataset is uploaded early in the run and most documents then wait in the pipeline's queues; a clock started at upload would expire for documents still queued (ADR 0016). A document the pipeline never finishes keeps the run open until the run is stopped.
 
 Failure messages for documents that belong to no known run (manual uploads, earlier runs) are acked and dropped.
 
-**Pause-aware timeout.** Workers do not fail documents while they wait (LLM usage limit or daily budget, LLM misconfiguration, PostgreSQL down: see the services' specs); the documents stay queued and continue later. So that such waits do not turn into timeouts, the backend polls every service's `/healthz` (`ingestor`, `text-extractor`, `fields-extractor`, `integrator`) every 5 s. While any of them reports failing, the timeout clocks of all unfinished documents stop, and every active run shows the pipeline as waiting, with the services and failing checks (for example `fields-extractor: llm`). A document that times out later carries the last waiting state as its timeout reason.
+**Pipeline waiting state.** Workers do not fail documents while they wait (LLM usage limit or daily budget, LLM misconfiguration, PostgreSQL down: see the services' specs); the documents stay queued and continue later. So that such a wait is visible, the backend polls every service's `/healthz` (`ingestor`, `text-extractor`, `fields-extractor`, `integrator`) every 5 s. While any of them reports failing, every active run shows the pipeline as waiting, with the services and failing checks (for example `fields-extractor: llm`).
 
 The services' `/healthz` responses carry an `errors` object with the reason per failing check (`/specs/pipeline-contracts.md`, Health endpoint), so the waiting state names the cause, for example `fields-extractor: llm_daily_budget_reached (paused): spent $10.0012 of $10.00`.
 
@@ -60,7 +62,7 @@ When the row is there, the backend reads the invoice and its lines (role `tester
 
 ### Stop, pause and resume
 
-- **Stop** (`POST /runs/{id}/stop`): no further uploads, ever. Documents already uploaded are tracked until they finish or time out; the run ends as `stopped`.
+- **Stop** (`POST /runs/{id}/stop`): no further uploads, ever, and tracking ends at once: documents still in the pipeline (`uploaded`) become `cancelled`, documents never uploaded stay `pending`, and the run ends as `stopped` with its summary. A row or failure that arrives later for a cancelled document is ignored (the pipeline still processes it; the tester does not stop that).
 - **Pause** (`POST /runs/{id}/pause`): no further uploads until resumed. Documents already uploaded keep being tracked. The run is `paused`.
 - **Resume** (`POST /runs/{id}/resume`): uploading continues with the documents not uploaded yet.
 - A run is `completed` when every document was uploaded and is finished.
@@ -74,14 +76,17 @@ Every document passes through the real LLM unless the stack runs in fake mode (`
 
 The run summary of a `synthetic` run contains (for `documents` runs see [`validation.md`](validation.md), Summary):
 
-- Document counts by status (`passed`, `failed`, `error`, `timeout`), and whether the run overlapped with another run.
-- Field accuracy per compared field (match / mismatch / missing / unexpected counts), and line accuracy (matched, missing, extra).
+- Document counts by status (`passed`, `failed`, `error`, `cancelled`; `timeout` in runs from before timeouts were removed), and whether the run overlapped with another run.
+- Headline metrics ([`comparison.md`](comparison.md), Metrics): overall field accuracy and micro precision / recall / F1, each for header fields and for line fields; header-only document accuracy.
+- Field accuracy per compared field (match / mismatch / missing / unexpected counts, with precision / recall / F1), and line accuracy (matched, missing, extra).
 - The same accuracy broken down by golden metadata: `template_id`, `currency`, `language`.
 - Pipeline errors by `stage` and `error_code`.
 - The `extraction_model` and `prompt_version` seen in the run's rows (to compare prompt versions across runs).
-- Durations: run wall-clock time, per-document time from upload to completion (median, p95, max).
+- Durations: run wall-clock time, per-document time from upload to completion (median, p95, max). The per-document time includes the time spent waiting in the pipeline's queues behind the run's other documents.
 
 Computed with DuckDB over the run's results (SQLite, attached) joined with the golden metadata.
+
+The summary is cached in `runs.summary_json` when the run ends. A cached `synthetic` summary without the headline metrics (runs finished before they were added) is recomputed from the stored results when read and the cache is replaced; if that fails (for example the source's golden set is no longer available), the old summary is returned unchanged and the UI shows the headline metrics as unavailable.
 
 ## Golden set access
 
@@ -103,9 +108,8 @@ For `synthetic` datasets, DuckDB reads the gzip JSON Lines shards directly (`rea
 | `AMQP_URL` | | RabbitMQ (consumes `documents.failed`) |
 | `DATABASE_URL` | | PostgreSQL, role `tester` |
 | `MINIO_ENDPOINT`, `MINIO_ACCESS_KEY`, `MINIO_SECRET_KEY` | | Artifacts and today's LLM spend |
-| `TESTER_DOCUMENT_TIMEOUT` | `600` | Seconds until an unfinished document is `timeout` |
 | `TESTER_COST_PER_DOCUMENT_USD` | `0.0026` | For the cost estimate |
-| `TESTER_SERVICE_HEALTH_URLS` | the four services' `/healthz` in the Compose network | Polled for the pause-aware timeout |
+| `TESTER_SERVICE_HEALTH_URLS` | the four services' `/healthz` in the Compose network | Polled for the pipeline waiting state |
 
 ## Open questions
 
