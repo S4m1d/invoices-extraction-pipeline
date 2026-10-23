@@ -2,11 +2,11 @@
 import { useState } from "react";
 import { Link, useParams } from "react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { api, CHECK_LABEL, isActive, KIND_LABEL, pct, seconds, type Breakdown, type DocumentsSummary, type Summary, type SyntheticSummary } from "../api";
+import { api, CHECK_LABEL, finishedCount, isActive, KIND_LABEL, pct, score, seconds, type Breakdown, type DocumentsSummary, type Metrics, type Summary, type SyntheticSummary } from "../api";
 import { PipelineBanner, StatusBadge } from "./common";
 import s from "../app.module.css";
 
-const STATUSES = ["passed", "failed", "error", "timeout", "uploaded", "pending"] as const;
+const STATUSES = ["passed", "failed", "error", "cancelled", "uploaded", "pending"] as const;
 
 export function RunPage() {
   const { runId = "" } = useParams();
@@ -33,8 +33,10 @@ export function RunPage() {
   if (run.isError) return <p className={s.error}>{String(run.error)}</p>;
   if (!run.data) return <p>Loading…</p>;
   const { run: r, counts, summary, waiting } = run.data;
-  const finished = counts.passed + counts.failed + counts.error + counts.timeout;
+  const finished = finishedCount(counts);
   const synthetic = r.kind !== "documents";
+  // `timeout` exists only in runs from before timeouts were removed (ADR 0016).
+  const statuses = counts.timeout ? [...STATUSES.slice(0, 4), "timeout" as const, ...STATUSES.slice(4)] : STATUSES;
 
   return (
     <>
@@ -52,7 +54,7 @@ export function RunPage() {
           {r.overlapped && <> · overlapped with another run (durations not comparable)</>}
         </p>
         <div className={s.stats}>
-          {STATUSES.map((st) => (
+          {statuses.map((st) => (
             <div key={st} className={s.stat}>
               <span className={s.statValue}>{counts[st]}</span>
               <span className={s.statLabel}>{st}</span>
@@ -64,7 +66,7 @@ export function RunPage() {
           {r.status === "running" && <button onClick={() => control.mutate("pause")}>Pause</button>}
           {r.status === "paused" && <button onClick={() => control.mutate("resume")}>Resume</button>}
           {isActive(r.status) && (
-            <button className={s.danger} onClick={() => confirm("Stop this run? Remaining documents are not uploaded.") && control.mutate("stop")}>
+            <button className={s.danger} onClick={() => confirm("Stop this run? Remaining documents are not uploaded, and documents still in the pipeline are cancelled.") && control.mutate("stop")}>
               Stop
             </button>
           )}
@@ -81,7 +83,7 @@ export function RunPage() {
             Status
             <select value={filters.status ?? ""} onChange={(e) => setFilters({ ...filters, status: e.target.value })}>
               <option value="">all</option>
-              {STATUSES.map((st) => (
+              {statuses.map((st) => (
                 <option key={st}>{st}</option>
               ))}
             </select>
@@ -137,7 +139,9 @@ function SummaryView({ summary }: { summary: Summary }) {
     <section className={s.card}>
       <h2>Summary</h2>
       <p>
-        Passed {d.passed} of {d.total} ({pct(d.passed, d.total)}) · failed {d.failed} · pipeline errors {d.error} · timeouts {d.timeout}
+        Passed {d.passed} of {d.total} ({pct(d.passed, d.total)}) · failed {d.failed} · pipeline errors {d.error}
+        {d.cancelled ? <> · cancelled {d.cancelled}</> : null}
+        {d.timeout ? <> · timeouts {d.timeout}</> : null}
       </p>
       <p className={s.muted}>
         Run time {seconds(summary.wall_clock_s)} · per document: median {seconds(summary.durations?.median_s)}, p95{" "}
@@ -237,9 +241,35 @@ function DocumentsSummaryView({ summary }: { summary: DocumentsSummary }) {
   );
 }
 
+/** Headline metrics (backend comparison.md, Metrics). */
+function MetricTiles({ metrics }: { metrics?: Metrics }) {
+  if (!metrics) return <p className={s.muted}>Headline metrics unavailable: this run's summary could not be recomputed.</p>;
+  const pr = (m: Metrics["header"]) => `P ${score(m.precision)} · R ${score(m.recall)}`;
+  const hd = metrics.header_documents;
+  const tiles = [
+    { label: "Header field accuracy", value: score(metrics.header.accuracy), note: `${metrics.header.match} of ${metrics.header.match + metrics.header.mismatch + metrics.header.missing + metrics.header.unexpected}` },
+    { label: "Line field accuracy", value: score(metrics.line.accuracy), note: `${metrics.line.match} of ${metrics.line.match + metrics.line.mismatch + metrics.line.missing + metrics.line.unexpected}` },
+    { label: "Header F1", value: score(metrics.header.f1), note: pr(metrics.header) },
+    { label: "Line F1", value: score(metrics.line.f1), note: pr(metrics.line) },
+    { label: "Documents with all header fields right", value: score(hd.accuracy), note: `${hd.correct} of ${hd.compared} compared` },
+  ];
+  return (
+    <div className={s.stats}>
+      {tiles.map((t) => (
+        <div key={t.label} className={s.stat}>
+          <span className={s.statValue}>{t.value}</span>
+          <span className={s.statLabel}>{t.label}</span>
+          <span className={s.statLabel}>{t.note}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function SyntheticSummaryView({ summary }: { summary: SyntheticSummary }) {
   return (
     <>
+      <MetricTiles metrics={summary.metrics} />
       <h3>Field accuracy</h3>
       <table className={s.table}>
         <thead>
@@ -250,6 +280,9 @@ function SyntheticSummaryView({ summary }: { summary: SyntheticSummary }) {
             <th>Missing</th>
             <th>Unexpected</th>
             <th>Accuracy</th>
+            <th>Precision</th>
+            <th>Recall</th>
+            <th>F1</th>
           </tr>
         </thead>
         <tbody>
@@ -266,6 +299,9 @@ function SyntheticSummaryView({ summary }: { summary: SyntheticSummary }) {
                 <td>{f.missing}</td>
                 <td>{f.unexpected}</td>
                 <td>{pct(f.match, total)}</td>
+                <td>{score(f.precision)}</td>
+                <td>{score(f.recall)}</td>
+                <td>{score(f.f1)}</td>
               </tr>
             );
           })}

@@ -2,7 +2,7 @@
 import { useState } from "react";
 import { Link, useNavigate } from "react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { api, isActive, KIND_LABEL, pct, type Dataset, type Kind } from "../api";
+import { api, finishedCount, isActive, KIND_LABEL, pct, score, type Dataset, type Kind } from "../api";
 import { PipelineBanner, StatusBadge } from "./common";
 import s from "../app.module.css";
 
@@ -145,12 +145,14 @@ export function HomePage() {
                 <th>Status</th>
                 <th>Progress</th>
                 <th>Passed</th>
+                <th>Header fields</th>
+                <th>Line fields</th>
                 <th>Model / prompt</th>
               </tr>
             </thead>
             <tbody>
-              {runs.data.map(({ run, counts, models }) => {
-                const finished = counts.passed + counts.failed + counts.error + counts.timeout;
+              {runs.data.map(({ run, counts, models, metrics }) => {
+                const finished = finishedCount(counts);
                 return (
                   <tr key={run.id}>
                     <td>
@@ -168,6 +170,8 @@ export function HomePage() {
                       {finished} / {run.documents_total}
                     </td>
                     <td>{pct(counts.passed, finished)}</td>
+                    <td>{score(metrics?.header.accuracy)}</td>
+                    <td>{score(metrics?.line.accuracy)}</td>
                     <td>{models?.map((m) => `${m.model} ${m.prompt ?? ""}`).join(", ") || "–"}</td>
                   </tr>
                 );

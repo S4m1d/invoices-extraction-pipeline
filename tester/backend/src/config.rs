@@ -1,7 +1,7 @@
 //! Configuration from the environment (tester/backend/specs/overview.md, Deployment and configuration).
 
 use anyhow::{Result, bail};
-use std::{path::PathBuf, time::Duration};
+use std::path::PathBuf;
 
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -16,7 +16,6 @@ pub struct Config {
     pub minio_endpoint: String,
     pub minio_access_key: String,
     pub minio_secret_key: String,
-    pub document_timeout: Duration,
     pub cost_per_document_usd: f64,
     pub daily_budget_usd: f64,
     pub service_health_urls: Vec<(String, String)>,
@@ -51,7 +50,6 @@ impl Config {
                 0.0
             }
         };
-        let timeout = number("TESTER_DOCUMENT_TIMEOUT", "600");
         let cost = number("TESTER_COST_PER_DOCUMENT_USD", "0.0026");
         let budget = number("LLM_DAILY_BUDGET_USD", "10");
 
@@ -85,7 +83,6 @@ impl Config {
             minio_endpoint,
             minio_access_key,
             minio_secret_key,
-            document_timeout: Duration::from_secs_f64(timeout),
             cost_per_document_usd: cost,
             daily_budget_usd: budget,
             service_health_urls: health,
@@ -116,7 +113,6 @@ mod tests {
     fn defaults() {
         let c = Config::load(env(&REQUIRED)).unwrap();
         assert_eq!(c.http_addr, "0.0.0.0:8090");
-        assert_eq!(c.document_timeout, Duration::from_secs(600));
         assert_eq!(c.service_health_urls.len(), 4);
         assert_eq!(c.service_health_urls[2].0, "fields-extractor");
         assert_eq!(c.cost_per_document_usd, 0.0026);
@@ -126,10 +122,10 @@ mod tests {
 
     #[test]
     fn reports_all_problems() {
-        let err = Config::load(env(&[("TESTER_DOCUMENT_TIMEOUT", "0"), ("TESTER_SERVICE_HEALTH_URLS", "nope")]))
+        let err = Config::load(env(&[("TESTER_COST_PER_DOCUMENT_USD", "0"), ("TESTER_SERVICE_HEALTH_URLS", "nope")]))
             .unwrap_err()
             .to_string();
-        for name in ["AMQP_URL", "DATABASE_URL", "MINIO_ENDPOINT", "TESTER_DOCUMENT_TIMEOUT", "TESTER_SERVICE_HEALTH_URLS"] {
+        for name in ["AMQP_URL", "DATABASE_URL", "MINIO_ENDPOINT", "TESTER_COST_PER_DOCUMENT_USD", "TESTER_SERVICE_HEALTH_URLS"] {
             assert!(err.contains(name), "{err} does not mention {name}");
         }
     }

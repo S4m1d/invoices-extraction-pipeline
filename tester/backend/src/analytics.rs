@@ -8,6 +8,11 @@ use serde_json::{Value, json};
 use sqlx::Row;
 use std::sync::Arc;
 
+/// Header-only document accuracy (comparison.md, Metrics): compared documents with every header field `match`.
+const HEADER_DOCUMENTS: &str = "SELECT count(*) AS compared,
+        count_if(NOT EXISTS (SELECT 1 FROM fields f WHERE f.invoice_id = d.invoice_id AND NOT f.is_line AND f.outcome <> 'match')) AS correct
+    FROM docs d WHERE status IN ('passed', 'failed')";
+
 pub async fn summary(app: &Arc<App>, run: &store::Run) -> Result<Value> {
     if run.kind == "documents" {
         return documents_summary(app, run).await;
@@ -77,12 +82,71 @@ pub async fn summary(app: &Arc<App>, run: &store::Run) -> Result<Value> {
         ))
     };
     let mut out = common(&conn, run, wall)?;
-    out.insert("fields".into(), json!(rows(&format!("SELECT field, bool_or(is_line) AS line_field, {field_stats} FROM fields GROUP BY field ORDER BY bool_or(is_line), field"))?));
+    let mut fields = rows(&format!("SELECT field, bool_or(is_line) AS line_field, {field_stats} FROM fields GROUP BY field ORDER BY bool_or(is_line), field"))?;
+    fields.iter_mut().for_each(with_scores);
+    let group = |is_line: bool| -> Result<Value> {
+        let mut v = rows(&format!("SELECT {field_stats} FROM fields WHERE is_line = {is_line}"))?.pop().unwrap_or_default();
+        with_scores(&mut v);
+        Ok(v)
+    };
+    let header_docs = rows(HEADER_DOCUMENTS)?
+    .pop()
+    .unwrap_or_default();
+    let header_accuracy = ratio(header_docs["correct"].as_i64().unwrap_or(0), header_docs["compared"].as_i64().unwrap_or(0));
+    out.insert("metrics".into(), json!({
+        "header": group(false)?,
+        "line": group(true)?,
+        "header_documents": {"compared": header_docs["compared"], "correct": header_docs["correct"], "accuracy": header_accuracy},
+    }));
+    out.insert("fields".into(), json!(fields));
     out.insert("lines".into(), json!(rows("SELECT count_if(outcome = 'compared') AS compared, count_if(outcome = 'missing') AS missing, count_if(outcome = 'extra') AS extra FROM lines")?.pop()));
     out.insert("by_template".into(), json!(breakdown("template_id")?));
     out.insert("by_currency".into(), json!(breakdown("currency")?));
     out.insert("by_language".into(), json!(breakdown("language")?));
     Ok(Value::Object(out))
+}
+
+/// Adds accuracy, precision, recall and F1 to an object with match / mismatch / missing / unexpected
+/// counts (comparison.md, Metrics). A score whose denominator is 0 is null.
+fn with_scores(v: &mut Value) {
+    let n = |k: &str| v[k].as_i64().unwrap_or(0);
+    let (matched, mismatch, missing, unexpected) = (n("match"), n("mismatch"), n("missing"), n("unexpected"));
+    let precision = ratio(matched, matched + mismatch + unexpected);
+    let recall = ratio(matched, matched + mismatch + missing);
+    let f1 = match (precision, recall) {
+        (Some(p), Some(r)) if p + r > 0.0 => Some(2.0 * p * r / (p + r)),
+        (Some(_), Some(_)) => Some(0.0),
+        _ => None,
+    };
+    let Value::Object(m) = v else { return };
+    m.insert("accuracy".into(), json!(ratio(matched, matched + mismatch + missing + unexpected)));
+    m.insert("precision".into(), json!(precision));
+    m.insert("recall".into(), json!(recall));
+    m.insert("f1".into(), json!(f1));
+}
+
+fn ratio(num: i64, den: i64) -> Option<f64> {
+    (den > 0).then(|| num as f64 / den as f64)
+}
+
+/// The run's cached summary. A synthetic summary from before the headline metrics is recomputed and
+/// the cache replaced; if that fails, the old one is returned (overview.md, Analytics).
+pub async fn cached(app: &Arc<App>, run: &store::Run) -> Result<Option<Value>> {
+    let Some(old) = store::summary(&app.db, &run.id).await? else { return Ok(None) };
+    if run.kind == "documents" || old.get("metrics").is_some() {
+        return Ok(Some(old));
+    }
+    match summary(app, run).await {
+        Ok(new) => {
+            store::set_summary(&app.db, &run.id, &new).await?;
+            tracing::info!(run_id = %run.id, "summary recomputed with headline metrics");
+            Ok(Some(new))
+        }
+        Err(e) => {
+            tracing::warn!(run_id = %run.id, error = %e, "cannot recompute summary, keeping the old one");
+            Ok(Some(old))
+        }
+    }
 }
 
 /// Summary of a documents run: required fields, checks and the extracted currency instead of golden accuracy.
@@ -165,7 +229,8 @@ fn common(conn: &Connection, run: &store::Run, wall: Option<f64>) -> Result<serd
     let v = json!({
         "kind": run.kind,
         "documents": rows("SELECT count(*) AS total, count_if(status = 'passed') AS passed, count_if(status = 'failed') AS failed,
-                                  count_if(status = 'error') AS error, count_if(status = 'timeout') AS timeout,
+                                  count_if(status = 'error') AS error, count_if(status = 'cancelled') AS cancelled,
+                                  count_if(status = 'timeout') AS timeout,
                                   count_if(status IN ('pending', 'uploaded')) AS unfinished FROM docs")?.pop(),
         "overlapped": run.overlapped,
         "errors": rows("SELECT error_stage AS stage, error_code AS code, count(*) AS documents FROM docs WHERE status = 'error' GROUP BY ALL ORDER BY documents DESC")?,
@@ -227,5 +292,46 @@ mod tests {
         let rows = query_json(&conn, "SELECT name, n * 10 AS tens FROM t ORDER BY name").unwrap();
         assert_eq!(rows, vec![json!({"name": "a", "tens": 10}), json!({"name": "b", "tens": 20})]);
         assert_eq!(query_json(&conn, "SELECT * FROM t WHERE false").unwrap(), Vec::<Value>::new());
+    }
+
+    #[test]
+    fn scores_follow_comparison_metrics() {
+        let mut v = json!({"match": 8, "mismatch": 1, "missing": 1, "unexpected": 0});
+        with_scores(&mut v);
+        assert_eq!(v["accuracy"], json!(0.8));
+        assert_eq!(v["precision"], json!(8.0 / 9.0));
+        assert_eq!(v["recall"], json!(0.8));
+        let f1 = v["f1"].as_f64().unwrap();
+        assert!((f1 - 2.0 * (8.0 / 9.0) * 0.8 / (8.0 / 9.0 + 0.8)).abs() < 1e-12);
+
+        let mut only_missing = json!({"match": 0, "mismatch": 0, "missing": 3, "unexpected": 0});
+        with_scores(&mut only_missing);
+        assert_eq!(only_missing["precision"], Value::Null); // nothing extracted
+        assert_eq!(only_missing["recall"], json!(0.0));
+        assert_eq!(only_missing["f1"], Value::Null);
+
+        let mut all_wrong = json!({"match": 0, "mismatch": 2, "missing": 0, "unexpected": 0});
+        with_scores(&mut all_wrong);
+        assert_eq!(all_wrong["f1"], json!(0.0));
+
+        let mut empty = json!({"match": 0, "mismatch": 0, "missing": 0, "unexpected": 0});
+        with_scores(&mut empty);
+        assert_eq!(empty["accuracy"], Value::Null);
+    }
+
+    #[test]
+    fn header_document_accuracy_ignores_lines_and_uncompared_documents() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE docs (invoice_id TEXT, status TEXT);
+             CREATE TABLE fields (invoice_id TEXT, is_line BOOLEAN, field TEXT, outcome TEXT);
+             INSERT INTO docs VALUES ('a', 'passed'), ('b', 'failed'), ('c', 'failed'), ('d', 'error');
+             INSERT INTO fields VALUES ('a', false, 'invoice_number', 'match'),
+                                       ('b', false, 'invoice_number', 'match'), ('b', true, 'amount', 'mismatch'),
+                                       ('c', false, 'due_date', 'missing');",
+        )
+        .unwrap();
+        let rows = query_json(&conn, HEADER_DOCUMENTS).unwrap();
+        assert_eq!(rows, vec![json!({"compared": 3, "correct": 2})]);
     }
 }

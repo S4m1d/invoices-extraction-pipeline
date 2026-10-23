@@ -1,6 +1,6 @@
 //! HTTP API (tester/backend/specs/api.md). Paths under /api; the frontend is served from /.
 
-use crate::{app::App, datasets, objects, runs, sources::Kind, store};
+use crate::{analytics, app::App, datasets, objects, runs, sources::Kind, store};
 use axum::{
     Json, Router,
     body::Body,
@@ -134,9 +134,10 @@ async fn list_runs(State(app): AppState, Query(q): Query<RunQuery>) -> ApiResult
     let mut out = Vec::new();
     for run in store::list_runs(&app.db).await?.into_iter().filter(|r| q.kind.as_deref().is_none_or(|k| k == r.kind)) {
         let counts = store::counts(&app.db, &run.id).await?;
-        let summary = store::summary(&app.db, &run.id).await?;
+        let summary = analytics::cached(&app, &run).await?;
         let models = summary.as_ref().and_then(|s| s.get("models").cloned());
-        out.push(json!({"run": run, "counts": counts, "models": models}));
+        let metrics = summary.as_ref().and_then(|s| s.get("metrics").cloned());
+        out.push(json!({"run": run, "counts": counts, "models": models, "metrics": metrics}));
     }
     Ok(Json(json!(out)))
 }
@@ -144,7 +145,7 @@ async fn list_runs(State(app): AppState, Query(q): Query<RunQuery>) -> ApiResult
 async fn get_run(State(app): AppState, Path(id): Path<String>) -> ApiResult<Json<Value>> {
     let run = store::get_run(&app.db, &id).await?.ok_or_else(|| not_found("run"))?;
     let counts = store::counts(&app.db, &id).await?;
-    let summary = store::summary(&app.db, &id).await?;
+    let summary = analytics::cached(&app, &run).await?;
     let waiting = app.pipeline.read().await.waiting();
     Ok(Json(json!({"run": run, "counts": counts, "waiting": waiting, "summary": summary})))
 }
