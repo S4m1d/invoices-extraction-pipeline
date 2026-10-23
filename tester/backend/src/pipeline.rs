@@ -1,4 +1,4 @@
-//! Pipeline health polling for the pause-aware timeout (tester/backend/specs/overview.md, Completion).
+//! Pipeline health polling for the waiting state (tester/backend/specs/overview.md, Completion).
 
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, sync::Arc, time::Duration};

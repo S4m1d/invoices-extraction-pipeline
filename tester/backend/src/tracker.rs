@@ -1,5 +1,5 @@
-//! Completion: rows in PostgreSQL, failure messages, pause-aware timeouts, run endings
-//! (tester/backend/specs/overview.md, Completion).
+//! Completion: rows in PostgreSQL, failure messages, run endings; no per-document timeout
+//! (tester/backend/specs/overview.md, Completion; ADR 0016).
 
 use crate::{
     analytics,
@@ -104,26 +104,19 @@ async fn row_exists(app: &App, document_id: &str) -> Result<bool> {
     Ok(n > 0)
 }
 
-/// Every 2 s: find rows, count active waiting time, time out, match late failures, end runs.
+/// Every 2 s: find rows, match late failures, end runs. Documents are tracked until they finish,
+/// however long they wait in the pipeline's queues.
 pub async fn track(app: Arc<App>, unmatched: Unmatched) {
-    let mut last_waiting: Option<String> = None;
-    let mut last = Instant::now();
     loop {
         tokio::time::sleep(TICK).await;
-        let elapsed = last.elapsed();
-        last = Instant::now();
-        let waiting = app.pipeline.read().await.waiting();
-        if waiting.is_some() {
-            last_waiting = waiting.clone();
-        }
-        if let Err(e) = tick(&app, &unmatched, waiting.is_some(), elapsed, last_waiting.as_deref()).await {
+        if let Err(e) = tick(&app, &unmatched).await {
             tracing::error!(error = %e, "tracker tick failed");
         }
     }
 }
 
-async fn tick(app: &Arc<App>, unmatched: &Unmatched, waiting: bool, elapsed: Duration, last_waiting: Option<&str>) -> Result<()> {
-    // Late failures first, so a document is not compared or timed out while its failure waits.
+async fn tick(app: &Arc<App>, unmatched: &Unmatched) -> Result<()> {
+    // Late failures first, so a document is not compared while its failure waits.
     {
         let mut pending = unmatched.lock().await;
         let mut keep = Vec::new();
@@ -161,16 +154,7 @@ async fn tick(app: &Arc<App>, unmatched: &Unmatched, waiting: bool, elapsed: Dur
                     }
                     None => store::mark_error(&app.db, &t.run_id, &t.invoice_id, "tester", "no_golden_record", "invoice not in golden set").await?,
                 }
-            } else if !waiting && t.active_wait_seconds + elapsed.as_secs_f64() >= app.cfg.document_timeout.as_secs_f64() {
-                let reason = match last_waiting {
-                    Some(w) => format!("no result within the timeout; last pipeline wait: {w}"),
-                    None => "no result within the timeout".to_string(),
-                };
-                store::mark_timeout(&app.db, &t.run_id, &t.invoice_id, &reason).await?;
             }
-        }
-        if !waiting {
-            store::add_wait(&app.db, elapsed.as_secs_f64()).await?; // the timeout clock stops while the pipeline waits
         }
     }
     end_runs(app).await
@@ -225,8 +209,8 @@ async fn extracted(app: &App, ids: &[String]) -> Result<HashMap<String, (Invoice
     Ok(out)
 }
 
-/// Running runs with everything finished become completed; stopped runs get their summary once their
-/// uploaded documents are finished.
+/// Running runs with everything finished become completed. Stopped runs are finished by Stop itself
+/// (runs::control); this catches one whose Stop did not get that far.
 async fn end_runs(app: &Arc<App>) -> Result<()> {
     for run in store::runs_with_status(&app.db, &["running", "stopped"]).await? {
         if run.finished_at.is_some() {

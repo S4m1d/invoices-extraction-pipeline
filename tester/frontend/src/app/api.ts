@@ -1,7 +1,8 @@
 // Backend API client and types (tester/backend/specs/api.md).
 
 export type RunStatus = "running" | "paused" | "stopped" | "completed";
-export type DocStatus = "pending" | "uploaded" | "passed" | "failed" | "error" | "timeout";
+/** `timeout` only in runs from before timeouts were removed (ADR 0016). */
+export type DocStatus = "pending" | "uploaded" | "passed" | "failed" | "error" | "cancelled" | "timeout";
 
 /** Data source kind (tester/backend/specs/data-sources.md). */
 export type Kind = "synthetic" | "documents";
@@ -54,13 +55,31 @@ export interface Run {
 
 export type Counts = Record<DocStatus, number>;
 
-export interface FieldStat {
+/** Outcome counts with their scores (backend comparison.md, Metrics); a score is null when its denominator is 0. */
+export interface Scores {
+  match: number;
+  mismatch: number;
+  missing: number;
+  unexpected: number;
+  accuracy: number | null;
+  precision: number | null;
+  recall: number | null;
+  f1: number | null;
+}
+
+export interface FieldStat extends Partial<Scores> {
   field: string;
   line_field: boolean;
   match: number;
   mismatch: number;
   missing: number;
   unexpected: number;
+}
+
+export interface Metrics {
+  header: Scores;
+  line: Scores;
+  header_documents: { compared: number; correct: number; accuracy: number | null };
 }
 
 export interface Breakdown {
@@ -72,7 +91,8 @@ export interface Breakdown {
 }
 
 interface SummaryCommon {
-  documents: { total: number; passed: number; failed: number; error: number; timeout: number; unfinished: number };
+  /** `cancelled` is absent in summaries stored before it existed. */
+  documents: { total: number; passed: number; failed: number; error: number; cancelled?: number; timeout: number; unfinished: number };
   overlapped: boolean;
   errors: { stage: string; code: string; documents: number }[];
   models: { model: string; prompt: string | null; documents: number }[];
@@ -83,6 +103,8 @@ interface SummaryCommon {
 export interface SyntheticSummary extends SummaryCommon {
   /** Absent in summaries stored before data sources existed. */
   kind?: "synthetic";
+  /** Absent when an old summary could not be recomputed (golden set unavailable). */
+  metrics?: Metrics;
   fields: FieldStat[];
   lines: { compared: number; missing: number; extra: number };
   by_template: Breakdown[];
@@ -110,6 +132,7 @@ export interface RunListItem {
   run: Run;
   counts: Counts;
   models: Summary["models"] | null;
+  metrics: Metrics | null;
 }
 
 export interface DocumentRow {
@@ -254,6 +277,12 @@ export const api = {
 };
 
 export const isActive = (s: RunStatus) => s === "running" || s === "paused";
+
+/** Documents that reached a final status. */
+export const finishedCount = (c: Counts) => c.passed + c.failed + c.error + (c.cancelled ?? 0) + (c.timeout ?? 0);
+
+/** A 0..1 score as a percentage with one decimal; `–` when null. */
+export const score = (v: number | null | undefined) => (v == null ? "–" : `${(100 * v).toFixed(1)}%`);
 
 export const pct = (part: number, total: number) => (total ? `${Math.round((100 * part) / total)}%` : "–");
 

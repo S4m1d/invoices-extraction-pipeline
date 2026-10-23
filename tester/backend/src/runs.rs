@@ -1,6 +1,7 @@
 //! Starting runs and uploading their documents (tester/backend/specs/overview.md, Runs).
 
 use crate::{
+    analytics,
     app::{App, Control},
     datasets,
     sources::Kind,
@@ -58,6 +59,15 @@ pub async fn control(app: &Arc<App>, id: &str, action: &str) -> Result<Result<St
                 let _ = tx.send(if next == "paused" { Control::Pause } else { Control::Stop });
             }
         }
+    }
+    if next == "stopped" {
+        // Tracking ends at once (overview.md, Stop; ADR 0016). Uploads still in flight are cancelled
+        // when they complete (store::mark_uploaded).
+        let cancelled = store::cancel_uploaded(&app.db, id).await?;
+        let run = store::get_run(&app.db, id).await?.expect("run exists");
+        let summary = analytics::summary(app, &run).await?;
+        store::finish_run(&app.db, id, "stopped", &summary).await?;
+        tracing::info!(run_id = id, cancelled, "run stopped, documents in the pipeline cancelled");
     }
     tracing::info!(run_id = id, action, status = next, "run control");
     Ok(Ok(next.to_string()))

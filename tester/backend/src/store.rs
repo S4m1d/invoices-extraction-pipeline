@@ -40,6 +40,7 @@ fn migrator() -> Migrator {
     Migrator::with_migrations(vec![
         m(1, "runs", include_str!("migrations/0001_runs.sql")),
         m(2, "data sources", include_str!("migrations/0002_data_sources.sql")),
+        m(3, "cancelled documents", include_str!("migrations/0003_cancelled_documents.sql")),
     ])
 }
 
@@ -143,6 +144,12 @@ pub async fn finish_run(db: &SqlitePool, id: &str, status: &str, summary: &serde
     Ok(())
 }
 
+/// Replaces a finished run's cached summary (recomputed after the summary gained fields).
+pub async fn set_summary(db: &SqlitePool, id: &str, summary: &serde_json::Value) -> Result<()> {
+    sqlx::query("UPDATE runs SET summary_json = ? WHERE id = ?").bind(summary.to_string()).bind(id).execute(db).await?;
+    Ok(())
+}
+
 pub async fn summary(db: &SqlitePool, id: &str) -> Result<Option<serde_json::Value>> {
     let s: Option<String> = sqlx::query_scalar("SELECT summary_json FROM runs WHERE id = ?").bind(id).fetch_optional(db).await?.flatten();
     Ok(s.and_then(|s| serde_json::from_str(&s).ok()))
@@ -159,7 +166,7 @@ pub async fn counts(db: &SqlitePool, run_id: &str) -> Result<serde_json::Map<Str
         .fetch_all(db)
         .await?;
     let mut m = serde_json::Map::new();
-    for s in ["pending", "uploaded", "passed", "failed", "error", "timeout"] {
+    for s in ["pending", "uploaded", "passed", "failed", "error", "cancelled", "timeout"] {
         m.insert(s.into(), 0.into());
     }
     for r in rows {
@@ -175,16 +182,34 @@ pub async fn pending(db: &SqlitePool, run_id: &str) -> Result<Vec<String>> {
         .await?)
 }
 
+/// An upload that completes after its run was stopped is cancelled at once: the run no longer tracks it.
 pub async fn mark_uploaded(db: &SqlitePool, run_id: &str, invoice_id: &str, document_id: &str, correlation_id: &str) -> Result<()> {
-    sqlx::query("UPDATE run_documents SET status = 'uploaded', document_id = ?, correlation_id = ?, uploaded_at = ? WHERE run_id = ? AND invoice_id = ?")
-        .bind(document_id)
-        .bind(correlation_id)
+    let at = now();
+    sqlx::query(
+        "UPDATE run_documents SET document_id = ?, correlation_id = ?, uploaded_at = ?,
+                status = CASE WHEN (SELECT status FROM runs WHERE runs.id = run_documents.run_id) = 'stopped' THEN 'cancelled' ELSE 'uploaded' END,
+                finished_at = CASE WHEN (SELECT status FROM runs WHERE runs.id = run_documents.run_id) = 'stopped' THEN ? END
+         WHERE run_id = ? AND invoice_id = ?",
+    )
+    .bind(document_id)
+    .bind(correlation_id)
+    .bind(&at)
+    .bind(&at)
+    .bind(run_id)
+    .bind(invoice_id)
+    .execute(db)
+    .await?;
+    Ok(())
+}
+
+/// Stop: documents still in the pipeline are no longer tracked (ADR 0016).
+pub async fn cancel_uploaded(db: &SqlitePool, run_id: &str) -> Result<u64> {
+    Ok(sqlx::query("UPDATE run_documents SET status = 'cancelled', finished_at = ? WHERE run_id = ? AND status = 'uploaded'")
         .bind(now())
         .bind(run_id)
-        .bind(invoice_id)
         .execute(db)
-        .await?;
-    Ok(())
+        .await?
+        .rows_affected())
 }
 
 pub async fn mark_error(db: &SqlitePool, run_id: &str, invoice_id: &str, stage: &str, code: &str, message: &str) -> Result<()> {
@@ -208,13 +233,12 @@ pub struct Tracked {
     pub kind: String,
     pub invoice_id: String,
     pub document_id: String,
-    pub active_wait_seconds: f64,
 }
 
 /// Uploaded documents still waiting for their result, across all runs.
 pub async fn tracked(db: &SqlitePool) -> Result<Vec<Tracked>> {
     let rows = sqlx::query(
-        "SELECT d.run_id, r.source, r.dataset, r.kind, d.invoice_id, d.document_id, d.active_wait_seconds FROM run_documents d JOIN runs r ON r.id = d.run_id WHERE d.status = 'uploaded'",
+        "SELECT d.run_id, r.source, r.dataset, r.kind, d.invoice_id, d.document_id FROM run_documents d JOIN runs r ON r.id = d.run_id WHERE d.status = 'uploaded'",
     )
     .fetch_all(db)
     .await?;
@@ -227,7 +251,6 @@ pub async fn tracked(db: &SqlitePool) -> Result<Vec<Tracked>> {
             kind: r.get("kind"),
             invoice_id: r.get("invoice_id"),
             document_id: r.get("document_id"),
-            active_wait_seconds: r.get("active_wait_seconds"),
         })
         .collect())
 }
@@ -238,25 +261,6 @@ pub async fn find_by_document(db: &SqlitePool, document_id: &str) -> Result<Opti
         .fetch_optional(db)
         .await?;
     Ok(row.map(|r| (r.get("run_id"), r.get("invoice_id"), r.get("status"))))
-}
-
-pub async fn add_wait(db: &SqlitePool, seconds: f64) -> Result<()> {
-    sqlx::query("UPDATE run_documents SET active_wait_seconds = active_wait_seconds + ? WHERE status = 'uploaded'")
-        .bind(seconds)
-        .execute(db)
-        .await?;
-    Ok(())
-}
-
-pub async fn mark_timeout(db: &SqlitePool, run_id: &str, invoice_id: &str, reason: &str) -> Result<()> {
-    sqlx::query("UPDATE run_documents SET status = 'timeout', timeout_reason = ?, finished_at = ? WHERE run_id = ? AND invoice_id = ? AND status = 'uploaded'")
-        .bind(reason)
-        .bind(now())
-        .bind(run_id)
-        .bind(invoice_id)
-        .execute(db)
-        .await?;
-    Ok(())
 }
 
 /// Stores a comparison and the extracted copy; the document becomes passed or failed.
@@ -292,8 +296,9 @@ pub async fn store_comparison(
             .execute(&mut *tx)
             .await?;
     }
-    finish_document(&mut tx, t, extracted, model, prompt, c.passed).await?;
-    tx.commit().await?;
+    if finish_document(&mut tx, t, extracted, model, prompt, c.passed).await? {
+        tx.commit().await?;
+    }
     Ok(())
 }
 
@@ -330,11 +335,14 @@ pub async fn store_validation(
             .execute(&mut *tx)
             .await?;
     }
-    finish_document(&mut tx, t, extracted, model, prompt, v.passed).await?;
-    tx.commit().await?;
+    if finish_document(&mut tx, t, extracted, model, prompt, v.passed).await? {
+        tx.commit().await?;
+    }
     Ok(())
 }
 
+/// Returns false (the caller rolls back its results) if the document is no longer `uploaded`, for
+/// example cancelled by a Stop since it was read.
 async fn finish_document(
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     t: &Tracked,
@@ -342,8 +350,8 @@ async fn finish_document(
     model: Option<String>,
     prompt: Option<String>,
     passed: bool,
-) -> Result<()> {
-    sqlx::query("UPDATE run_documents SET status = ?, finished_at = ?, extracted_json = ?, extraction_model = ?, prompt_version = ? WHERE run_id = ? AND invoice_id = ? AND status = 'uploaded'")
+) -> Result<bool> {
+    let updated = sqlx::query("UPDATE run_documents SET status = ?, finished_at = ?, extracted_json = ?, extraction_model = ?, prompt_version = ? WHERE run_id = ? AND invoice_id = ? AND status = 'uploaded'")
         .bind(if passed { "passed" } else { "failed" })
         .bind(now())
         .bind(serde_json::to_string(extracted)?)
@@ -352,8 +360,9 @@ async fn finish_document(
         .bind(&t.run_id)
         .bind(&t.invoice_id)
         .execute(&mut **tx)
-        .await?;
-    Ok(())
+        .await?
+        .rows_affected();
+    Ok(updated == 1)
 }
 
 pub async fn unfinished(db: &SqlitePool, run_id: &str) -> Result<(i64, i64)> {
